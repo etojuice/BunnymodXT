@@ -5,7 +5,7 @@
 #include "triangle_utils.hpp"
 #include "modules.hpp"
 #include "common.hpp"
-#include <gl/GL.h>
+#include <GL/gl.h>
 
 #include "hud_custom.hpp"
 
