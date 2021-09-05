@@ -1179,6 +1179,8 @@ namespace CustomHud
 			return false;
 		}
 		return true;
+	}
+
 	static void DrawCrosshair(float time)
 	{
 		if (!CVars::bxt_cross.GetBool())
