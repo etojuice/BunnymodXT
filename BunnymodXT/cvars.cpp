@@ -56,7 +56,6 @@ namespace CVars
 	CVarWrapper bxt_show_nodes("bxt_show_nodes", "0");
 	CVarWrapper bxt_show_cine_monsters("bxt_show_cine_monsters", "0");
 	CVarWrapper bxt_show_routes("bxt_show_routes", "0");
-	CVarWrapper bxt_show_custom_triggers("bxt_show_custom_triggers", "1");
 	CVarWrapper bxt_show_sounds("bxt_show_sounds", "0");
 	CVarWrapper bxt_show_sounds_ignore("bxt_show_sounds_ignore", "player,meat,carcass,world,garbage");
 	CVarWrapper bxt_show_sounds_sphere("bxt_show_sounds_sphere", "1");
