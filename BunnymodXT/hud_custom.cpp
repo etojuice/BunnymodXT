@@ -1134,7 +1134,6 @@ namespace CustomHud
 
 		const auto& cl = ClientDLL::GetInstance();
 		const auto& sv = ServerDLL::GetInstance();
-		const auto pTriAPI = cl.pEngfuncs->pTriAPI;
 		const auto sounds = sv.GetSounds();
 		const std::string ignoreStr = CVars::bxt_show_sounds_ignore.GetString();
 		const auto ignores = CommonUtils::splitString(ignoreStr, ",");

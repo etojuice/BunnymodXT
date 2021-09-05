@@ -32,7 +32,7 @@ namespace TriangleDrawing
 			return;
 
 		const float svTime = static_cast<float>(HwDLL::GetInstance().GetTime());
-		const float offsetAxis = 1.0f * std::sinf(10.0f * svTime) + 4.0f;
+		const float offsetAxis = 1.0f * std::sin(10.0f * svTime) + 4.0f;
 		const Vector offset(offsetAxis, offsetAxis, offsetAxis);
 
 		pTriAPI->RenderMode(kRenderTransAdd);
