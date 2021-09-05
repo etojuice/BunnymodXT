@@ -30,11 +30,10 @@ extern "C" void __cdecl _ZN11COFGeneWorm10DyingThinkEv(void* thisptr)
 	return ServerDLL::HOOKED_COFGeneWorm__DyingThink_Linux(thisptr);
 }
 
-// https://github.com/YaLTeR/BunnymodXT/issues/63
-// extern "C" void __cdecl _ZN13CMultiManager10ManagerUseEP11CBaseEntityS1_8USE_TYPEf(void* thisptr, void* pActivator, void* pCaller, int useType, float value)
-// {
-//         return ServerDLL::HOOKED_CMultiManager__ManagerUse_Linux(thisptr, pActivator, pCaller, useType, value);
-// }
+extern "C" void __cdecl _Z11FireTargetsPKcP11CBaseEntityS2_8USE_TYPEf(char* targetName, void* pActivator, void* pCaller, int useType, float value)
+{
+     return ServerDLL::HOOKED_FireTargets_Linux(targetName, pActivator, pCaller, useType, value);
+}
 
 extern "C" int __cdecl _Z13AddToFullPackP14entity_state_siP7edict_sS2_iiPh(struct entity_state_s* state, int e, edict_t* ent, edict_t* host, int hostflags, int player, unsigned char* pSet)
 {
@@ -59,6 +58,11 @@ extern "C" void __cdecl _ZN6CGraph9InitGraphEv(void* thisptr)
 extern "C" void __cdecl _ZN11CBasePlayer20CheatImpulseCommandsEi(void* thisptr, int iImpulse)
 {
 	return ServerDLL::HOOKED_CBasePlayer__CheatImpulseCommands_Linux(thisptr, iImpulse);
+}
+
+extern "C" void __cdecl _ZN12CTriggerSave9SaveTouchEP11CBaseEntity(void* thisptr, void* pOther)
+{
+	return ServerDLL::HOOKED_CTriggerSave__SaveTouch_Linux(thisptr, pOther);
 }
 #endif
 
@@ -92,6 +96,7 @@ void ServerDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* m
 			ORIG_COFGeneWorm__DyingThink, HOOKED_COFGeneWorm__DyingThink,
 			ORIG_CApache__DyingThink, HOOKED_CApache__DyingThink,
 			ORIG_CBaseDoor__DoorGoUp, HOOKED_CBaseDoor__DoorGoUp,
+			ORIG_CBaseDoor__DoorHitTop, HOOKED_CBaseDoor__DoorHitTop,
 			ORIG_CMultiManager__ManagerThink, HOOKED_CMultiManager__ManagerThink,
 			ORIG_AddToFullPack, HOOKED_AddToFullPack,
 			ORIG_CTriggerVolume__Spawn, HOOKED_CTriggerVolume__Spawn,
@@ -100,7 +105,10 @@ void ServerDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* m
 			ORIG_CBasePlayer__TakeDamage, HOOKED_CBasePlayer__TakeDamage,
 			ORIG_CGraph__InitGraph, HOOKED_CGraph__InitGraph,
 			ORIG_CBasePlayer__CheatImpulseCommands, HOOKED_CBasePlayer__CheatImpulseCommands,
-			ORIG_CTriggerSave__SaveTouch, HOOKED_CTriggerSave__SaveTouch);
+			ORIG_CTriggerSave__SaveTouch, HOOKED_CTriggerSave__SaveTouch,
+			ORIG_CChangeLevel__UseChangeLevel, HOOKED_CChangeLevel__UseChangeLevel,
+			ORIG_CChangeLevel__TouchChangeLevel, HOOKED_CChangeLevel__TouchChangeLevel,
+			ORIG_CBaseMonster__Killed, HOOKED_CBaseMonster__Killed);
 	}
 }
 
@@ -123,6 +131,7 @@ void ServerDLL::Unhook()
 			ORIG_COFGeneWorm__DyingThink,
 			ORIG_CApache__DyingThink,
 			ORIG_CBaseDoor__DoorGoUp,
+			ORIG_CBaseDoor__DoorHitTop,
 			ORIG_CMultiManager__ManagerThink,
 			ORIG_AddToFullPack,
 			ORIG_CTriggerVolume__Spawn,
@@ -131,7 +140,10 @@ void ServerDLL::Unhook()
 			ORIG_CBasePlayer__TakeDamage,
 			ORIG_CGraph__InitGraph,
 			ORIG_CBasePlayer__CheatImpulseCommands,
-			ORIG_CTriggerSave__SaveTouch);
+			ORIG_CTriggerSave__SaveTouch,
+			ORIG_CChangeLevel__UseChangeLevel,
+			ORIG_CChangeLevel__TouchChangeLevel,
+			ORIG_CBaseMonster__Killed);
 	}
 
 	Clear();
@@ -157,8 +169,10 @@ void ServerDLL::Clear()
 	ORIG_COFGeneWorm__DyingThink_Linux = nullptr;
 	ORIG_CApache__DyingThink = nullptr;
 	ORIG_CBaseDoor__DoorGoUp = nullptr;
+	ORIG_CBaseDoor__DoorHitTop = nullptr;
+	ORIG_CBaseMonster__Killed = nullptr;
 	ORIG_CMultiManager__ManagerThink = nullptr;
-	ORIG_CMultiManager__ManagerUse_Linux = nullptr;
+	ORIG_FireTargets_Linux = nullptr;
 	ORIG_AddToFullPack = nullptr;
 	ORIG_CTriggerVolume__Spawn = nullptr;
 	ORIG_CTriggerVolume__Spawn_Linux = nullptr;
@@ -175,6 +189,10 @@ void ServerDLL::Clear()
 	ORIG_CTriggerSave__SaveTouch = nullptr;
 	ORIG_CSoundEnt__ActiveList = nullptr;
 	ORIG_CSoundEnt__SoundPointerForIndex = nullptr;
+	ORIG_CTriggerSave__SaveTouch_Linux = nullptr;
+	ORIG_CChangeLevel__UseChangeLevel = nullptr;
+	ORIG_CChangeLevel__TouchChangeLevel = nullptr;
+	ORIG_CChangeLevel__InTransitionVolume = nullptr;
 	ppmove = nullptr;
 	offPlayerIndex = 0;
 	offOldbuttons = 0;
@@ -184,6 +202,8 @@ void ServerDLL::Clear()
 	offAngles = 0;
 	offCmd = 0;
 	offBhopcap = 0;
+	pBhopcapWindows = 0;
+	pCZDS_Velocity_Byte = 0;
 	offm_iClientFOV = 0;
 	offm_rgAmmoLast = 0;
 	maxAmmoSlots = 0;
@@ -310,6 +330,16 @@ void ServerDLL::FindStuff()
 				case 5:
 					ppmove = *reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(ORIG_PM_Jump) + 5);
 					break;
+				case 6:
+					ppmove = *reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(ORIG_PM_Jump) + 24);
+					break;
+				case 7:
+					ppmove = *reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(ORIG_PM_Jump) + 6);
+					break;
+				case 8:
+				case 9:
+					ppmove = *reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(ORIG_PM_Jump) + 8);
+					break;
 				}
 			}
 		});
@@ -335,6 +365,8 @@ void ServerDLL::FindStuff()
 				offm_rgAmmoLast = 0x604;
 				offm_iClientFOV = 0x4E0;
 				// Don't set offm_Route or offm_iRouteIndex here because I couldn't find this function
+				offFuncIsPlayer = 0xA0;
+				offFuncCenter = 0xCC;
 				break;
 			case 2:  // HazardousCourse2
 				maxAmmoSlots = MAX_AMMO_SLOTS;
@@ -349,6 +381,7 @@ void ServerDLL::FindStuff()
 				offm_iClientFOV = 0x47C;
 				offm_Route = 0x154;
 				offm_iRouteIndex = 0x1d8;
+				offFuncCenter = 0xCC;
 				break;
 			case 4:  // HL-SteamPipe-8308
 				maxAmmoSlots = MAX_AMMO_SLOTS;
@@ -358,9 +391,66 @@ void ServerDLL::FindStuff()
 				offm_iRouteIndex = 0x204;
 				break;
 			case 5: // TWHL-Tower-2
+			case 6: // Halfquake Trilogy
 				maxAmmoSlots = MAX_AMMO_SLOTS;
 				offm_rgAmmoLast = 0x5F4;
 				offm_iClientFOV = 0x548;
+				offFuncIsPlayer = 0xD4;
+				offFuncCenter = 0x100;
+				offFuncObjectCaps = 0x44;
+				break;
+			case 7: // Echoes
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x5F4;
+				offm_iClientFOV = 0x548;
+				offFuncIsPlayer = 0xCC;
+				offFuncCenter = 0xF8;
+				offFuncObjectCaps = 0x3C;
+				break;
+			case 8: // Decay
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x544;
+				offm_iClientFOV = 0x49C;
+				break;
+			case 9: // AoMDC
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x578;
+				offm_iClientFOV = 0x4D0;
+				break;
+			case 10: // PARANOIA
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x62C;
+				offm_iClientFOV = 0x584;
+				offFuncIsPlayer = 0xD0;
+				offFuncCenter = 0xFC;
+				offFuncObjectCaps = 0x40;
+				break;
+			case 11: // OP4-8684
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x608;
+				offm_iClientFOV = 0x4E4;
+				offFuncIsPlayer = 0xA0;
+				offFuncCenter = 0xCC;
+				break;
+			case 12: // HL-WON
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x50C;
+				offm_iClientFOV = 0x464;
+				break;
+			case 13: // OP4-WON
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x5C0;
+				offm_iClientFOV = 0x4A4;
+				offFuncIsPlayer = 0xA0;
+				offFuncCenter = 0xCC;
+				break;
+			case 14: // CSCZDS
+				maxAmmoSlots = MAX_AMMO_SLOTS;
+				offm_rgAmmoLast = 0x540;
+				offm_iClientFOV = 0x89C;
+				offFuncIsPlayer = 0xA8;
+				offFuncCenter = 0xDC;
+				offFuncObjectCaps = 0x18;
 				break;
 			default:
 				assert(false);
@@ -375,6 +465,19 @@ void ServerDLL::FindStuff()
 			case 0: // HL-SteamPipe
 				// the actual byte inside the pattern that needs changing
 				pCZDS_Velocity_Byte += 6;
+				break;
+			default:
+				assert(false);
+			}
+		});
+
+	auto fPM_Jump_Bhopcap_Windows = FindAsync(
+		pBhopcapWindows,
+		patterns::shared::Bhopcap_Windows,
+		[&](auto pattern) {
+			switch (pattern - patterns::shared::Bhopcap_Windows.cbegin()) {
+			case 0: // DSM-Demo-1
+				pBhopcapWindows += 36;
 				break;
 			default:
 				assert(false);
@@ -401,7 +504,8 @@ void ServerDLL::FindStuff()
 			}
 		});
 	auto fCBasePlayer__CheatImpulseCommands = FindAsync(ORIG_CBasePlayer__CheatImpulseCommands, patterns::server::CBasePlayer__CheatImpulseCommands);
-	auto fCTriggerSave__SaveTouch = FindAsync(ORIG_CTriggerSave__SaveTouch, patterns::server::CTriggerSave__SaveTouch);
+	auto fCBaseMonster__Killed = FindAsync(ORIG_CBaseMonster__Killed, patterns::server::CBaseMonster__Killed);
+	auto fCChangeLevel__InTransitionVolume = FindAsync(ORIG_CChangeLevel__InTransitionVolume, patterns::server::CChangeLevel__InTransitionVolume);
 
 	auto fCSoundEnt__ActiveList = FindAsync(ORIG_CSoundEnt__ActiveList, patterns::server::CSoundEnt__ActiveList);
 	auto fCSoundEnt__SoundPointerForIndex = FindAsync(ORIG_CSoundEnt__SoundPointerForIndex, patterns::server::CSoundEnt__SoundPointerForIndex);
@@ -413,6 +517,9 @@ void ServerDLL::FindStuff()
 			switch (pattern - patterns::server::CGraph__InitGraph.cbegin()) {
 			case 0:  // HL-SteamPipe
 			case 1:
+			case 2:
+			case 3:
+			case 4:
 				offm_pNodes = 0x0C;
 				offm_vecOrigin = 0x00;
 				offm_cNodes = 0x18;
@@ -452,6 +559,11 @@ void ServerDLL::FindStuff()
 				offNihilanthIrritation = *reinterpret_cast<ptrdiff_t*>(pMiddleOfCNihilanth__NextActivity - 0x1ab);
 				offNihilanthRecharger = *reinterpret_cast<ptrdiff_t*>(pMiddleOfCNihilanth__NextActivity + 0x2b);
 				break;
+			case 3: // Half-Payne
+				offNihilanthLevel = *reinterpret_cast<ptrdiff_t *>(pMiddleOfCNihilanth__NextActivity + 0x44);
+				offNihilanthIrritation = *reinterpret_cast<ptrdiff_t *>(pMiddleOfCNihilanth__NextActivity - 0x1a1);
+				offNihilanthRecharger = *reinterpret_cast<ptrdiff_t *>(pMiddleOfCNihilanth__NextActivity + 0x2b);
+				break;
 			default:
 				assert(false);
 			}
@@ -468,6 +580,9 @@ void ServerDLL::FindStuff()
 				break;
 			case 1: // HL-SteamPipe
 				offNihilanthSpheres = *reinterpret_cast<ptrdiff_t*>(pCNihilanth__EmitSphere + 0x15);
+				break;
+			case 2: // Half-Payne
+				offNihilanthSpheres = *reinterpret_cast<ptrdiff_t *>(pCNihilanth__EmitSphere + 0x1a);
 				break;
 			default:
 				assert(false);
@@ -492,12 +607,8 @@ void ServerDLL::FindStuff()
 	{
 		auto pattern = fPM_Jump_CZDS_Velocity_Byte.get();
 		if (pCZDS_Velocity_Byte) {
-			if (pattern == patterns::server::CZDS_Velocity_Byte.cend())
-				EngineDevMsg("[server dll] Found CZDS Velocity Reset Byte at %p.\n", pCZDS_Velocity_Byte);
-			else
-				EngineDevMsg("[server dll] Found CZDS Velocity Reset Byte at %p (using the %s pattern).\n", pCZDS_Velocity_Byte, pattern->name());
-		}
-		else {
+			EngineDevMsg("[server dll] Found CZDS Velocity Reset Byte at %p (using the %s pattern).\n", pCZDS_Velocity_Byte, pattern->name());
+		} else {
 			EngineDevWarning("[server dll] Could not find CZDS Velocity Reset Byte.\n");
 		}
 	}
@@ -516,6 +627,7 @@ void ServerDLL::FindStuff()
 
 	{
 		auto pattern = fPM_Jump.get();
+		auto pattern2 = fPM_Jump_Bhopcap_Windows.get();
 		if (ORIG_PM_Jump) {
 			if (pattern == patterns::shared::PM_Jump.cend())
 				EngineDevMsg("[server dll] Found PM_Jump at %p.\n", ORIG_PM_Jump);
@@ -523,6 +635,8 @@ void ServerDLL::FindStuff()
 				EngineDevMsg("[server dll] Found PM_Jump at %p (using the %s pattern).\n", ORIG_PM_Jump, pattern->name());
 			if (offBhopcap)
 				EngineDevMsg("[server dll] Found the bhopcap pattern at %p.\n", reinterpret_cast<void*>(offBhopcap + reinterpret_cast<uintptr_t>(ORIG_PM_Jump) - 27));
+			if (pBhopcapWindows)
+				EngineDevMsg("[server dll] Found bhopcap jump instruction at %p (using the %s pattern).\n", pBhopcapWindows, pattern2->name());
 		} else {
 			EngineDevWarning("[server dll] Could not find PM_Jump.\n");
 			EngineWarning("Autojump is not available.\n");
@@ -602,7 +716,7 @@ void ServerDLL::FindStuff()
 				offm_cNodes = 0x18;
 				size_CNode = 0x58;
 
-				EngineDevMsg("[server dll] Found CGraph::InitGraph [Linux] at %p.\n", ORIG_CGraph__InitGraph);
+				EngineDevMsg("[server dll] Found CGraph::InitGraph [Linux] at %p.\n", ORIG_CGraph__InitGraph_Linux);
 			} else {
 				EngineDevWarning("[server dll] Could not find CGraph::InitGraph.\n");
 				EngineWarning("AI node display is not available.\n");
@@ -637,7 +751,7 @@ void ServerDLL::FindStuff()
 		} else {
 			ORIG_CBasePlayer__CheatImpulseCommands_Linux = reinterpret_cast<_CBasePlayer__CheatImpulseCommands_Linux>(MemUtils::GetSymbolAddress(m_Handle, "_ZN11CBasePlayer20CheatImpulseCommandsEi"));
 			if (ORIG_CBasePlayer__CheatImpulseCommands_Linux) {
-				EngineDevMsg("[server dll] Found CBasePlayer::CheatImpulseCommands [Linux] at %p.\n", ORIG_CBasePlayer__CheatImpulseCommands);
+				EngineDevMsg("[server dll] Found CBasePlayer::CheatImpulseCommands [Linux] at %p.\n", ORIG_CBasePlayer__CheatImpulseCommands_Linux);
 			} else {
 				EngineDevWarning("[server dll] Could not find CBasePlayer::CheatImpulseCommands.\n");
 			}
@@ -645,13 +759,39 @@ void ServerDLL::FindStuff()
 	}
 
 	{
-		auto pattern = fCTriggerSave__SaveTouch.get();
-		if (ORIG_CTriggerSave__SaveTouch) {
-			EngineDevMsg("[server dll] Found CTriggerSave::SaveTouch at %p (using the %s pattern).\n", ORIG_CTriggerSave__SaveTouch, pattern->name());
+		auto pattern = fCBaseMonster__Killed.get();
+		if (ORIG_CBaseMonster__Killed) {
+			EngineDevMsg("[server dll] Found CBaseMonster::Killed at %p (using the %s pattern).\n", ORIG_CBaseMonster__Killed, pattern->name());
 		}
 		else {
-			EngineDevWarning("[server dll] Could not find CTriggerSave::SaveTouch.\n");
-			EngineWarning("bxt_disable_autosave is not available.\n");
+			EngineDevWarning("[server dll] Could not find CBaseMonster::Killed.\n");
+			EngineWarning("Wanted! and Crowbar of Time automatic timer stopping is not available.\n");
+		}
+	}
+
+	ORIG_CBaseDoor__DoorHitTop = reinterpret_cast<_CBaseDoor__DoorHitTop>(MemUtils::GetSymbolAddress(m_Handle, "?DoorHitTop@CBaseDoor@@QAEXXZ"));
+	{
+		auto pattern = fCChangeLevel__InTransitionVolume.get();
+		if (ORIG_CBaseDoor__DoorHitTop && ORIG_CChangeLevel__InTransitionVolume) {
+			EngineDevMsg("[server dll] Found CBaseDoor::DoorHitTop at %p.\n", ORIG_CBaseDoor__DoorHitTop);
+			EngineDevMsg("[server dll] Found CChangeLevel::InTransitionVolume at %p (using the %s pattern).\n", ORIG_CChangeLevel__InTransitionVolume, pattern->name());
+		} else {
+			EngineDevWarning("[server dll] Could not find CBaseDoor::DoorHitTop and CChangeLevel::InTransitionVolume.\n");
+			EngineWarning("The Xeno Project automatic timer stopping is not available.\n");
+			ORIG_CBaseDoor__DoorHitTop = nullptr;
+			ORIG_CChangeLevel__InTransitionVolume = nullptr;
+		}
+	}
+
+	ORIG_CChangeLevel__UseChangeLevel = reinterpret_cast<_CChangeLevel__UseChangeLevel>(MemUtils::GetSymbolAddress(m_Handle, "?UseChangeLevel@CChangeLevel@@QAEXPAVCBaseEntity@@0W4USE_TYPE@@M@Z"));
+	ORIG_CChangeLevel__TouchChangeLevel = reinterpret_cast<_CChangeLevel__TouchChangeLevel>(MemUtils::GetSymbolAddress(m_Handle, "?TouchChangeLevel@CChangeLevel@@QAEXPAVCBaseEntity@@@Z"));
+	{
+		if (ORIG_CChangeLevel__UseChangeLevel && ORIG_CChangeLevel__TouchChangeLevel) {
+			EngineDevMsg("[server dll] Found CChangeLevel::UseChangeLevel at %p.\n", ORIG_CChangeLevel__UseChangeLevel);
+			EngineDevMsg("[server dll] Found CChangeLevel::TouchChangeLevel at %p.\n", ORIG_CChangeLevel__TouchChangeLevel);
+		} else {
+			EngineDevWarning("[server dll] Could not find CChangeLevel::UseChangeLevel and CChangeLevel::TouchChangeLevel.\n");
+			EngineWarning("bxt_disable_changelevel is not available.\n");
 		}
 	}
 
@@ -689,7 +829,7 @@ void ServerDLL::FindStuff()
 		if (ORIG_GetEntityAPI) {
 			DLL_FUNCTIONS funcs;
 			if (ORIG_GetEntityAPI(&funcs, 140)) {
-				// Gets our hooked addresses on Linux.
+				// Gets our hooked addresses on Windows.
 				ORIG_CmdStart = funcs.pfnCmdStart;
 				ORIG_AddToFullPack = funcs.pfnAddToFullPack;
 				ORIG_ClientCommand = funcs.pfnClientCommand;
@@ -752,16 +892,30 @@ void ServerDLL::FindStuff()
 		EngineWarning("They Hunger Episode 2 automatic timer stopping is not available.\n");
 	}
 
+	ORIG_CTriggerSave__SaveTouch = reinterpret_cast<_CTriggerSave__SaveTouch>(MemUtils::GetSymbolAddress(m_Handle, "?SaveTouch@CTriggerSave@@QAEXPAVCBaseEntity@@@Z"));
+	if (ORIG_CTriggerSave__SaveTouch) {
+		EngineDevMsg("[server dll] Found CTriggerSave::SaveTouch at %p.\n", ORIG_CTriggerSave__SaveTouch);
+	}
+	else {
+		ORIG_CTriggerSave__SaveTouch_Linux = reinterpret_cast<_CTriggerSave__SaveTouch_Linux>(MemUtils::GetSymbolAddress(m_Handle, "_ZN12CTriggerSave9SaveTouchEP11CBaseEntity"));
+		if (ORIG_CTriggerSave__SaveTouch_Linux)
+			EngineDevMsg("[server dll] Found CTriggerSave::SaveTouch [Linux] at %p.\n", ORIG_CTriggerSave__SaveTouch_Linux);
+		else {
+			EngineDevWarning("[server dll] Could not find CTriggerSave::SaveTouch.\n");
+			EngineWarning("bxt_disable_autosave is not available.\n");
+		}
+	}
+
 	ORIG_CMultiManager__ManagerThink = reinterpret_cast<_CMultiManager__ManagerThink>(MemUtils::GetSymbolAddress(m_Handle, "?ManagerThink@CMultiManager@@QAEXXZ"));
 	if (ORIG_CMultiManager__ManagerThink) {
 		EngineDevMsg("[server dll] Found CMultiManager::ManagerThink at %p.\n", ORIG_CMultiManager__ManagerThink);
 	} else {
-		// https://github.com/YaLTeR/BunnymodXT/issues/63
-		// ORIG_CMultiManager__ManagerUse_Linux = reinterpret_cast<_CMultiManager__ManagerUse_Linux>(MemUtils::GetSymbolAddress(m_Handle, "_ZN13CMultiManager10ManagerUseEP11CBaseEntityS1_8USE_TYPEf"));
-		if (ORIG_CMultiManager__ManagerUse_Linux)
-			EngineDevMsg("[server dll] Found CMultiManager::ManagerUse [Linux] at %p.\n", ORIG_CMultiManager__ManagerUse_Linux);
+		// https://github.com/YaLTeR/BunnymodXT/issues/63 <- because of this issue FireTargets is hooked on Linux instead, which is what MM::Think calls anyway
+		ORIG_FireTargets_Linux = reinterpret_cast<_FireTargets_Linux>(MemUtils::GetSymbolAddress(m_Handle, "_Z11FireTargetsPKcP11CBaseEntityS2_8USE_TYPEf"));
+		if (ORIG_FireTargets_Linux)
+			EngineDevMsg("[server dll] Found FireTargets [Linux] at %p.\n", ORIG_FireTargets_Linux);
 		else {
-			EngineDevWarning("[server dll] Could not find CMultiManager::ManagerThink or CMultiManager::ManagerUse.\n");
+			EngineDevWarning("[server dll] Could not find FireTargets or CMultiManager::ManagerUse.\n");
 			EngineWarning("Blue Shift and Gunman Chronicles automatic timer stopping is not available.\n");
 		}
 	}
@@ -875,6 +1029,9 @@ void ServerDLL::FindStuff()
 			auto svencoop = false;
 			bool twhltower = false;
 			bool twhltower2 = false;
+			bool hqtrilogy = false;
+			bool paranoia = false;
+			bool halfpayne = false;
 			if (!addr)
 			{
 				// Big Lolly version: push eax; push offset dword; call memcpy
@@ -898,7 +1055,28 @@ void ServerDLL::FindStuff()
 							// TWHL Tower 2
 							static constexpr auto p = PATTERN("68 ?? ?? ?? ?? E8 ?? ?? ?? ?? 8B 44 24 14 83 C4 0C A3");
 							addr = MemUtils::find_pattern(pGiveFnptrsToDll, 40, p);
-							twhltower2 = true;
+							if (addr) {
+								twhltower2 = true;
+							} else {
+								// Halfquake Trilogy
+								static constexpr auto p = PATTERN("68 ?? ?? ?? ?? E8 ?? ?? ?? ?? 8B 45 0C 83 C4 0C A3");
+								addr = MemUtils::find_pattern(pGiveFnptrsToDll, 40, p);
+								if (addr) {
+									hqtrilogy = true;
+								} else {
+									// PARANOIA
+									static constexpr auto p = PATTERN("BF ?? ?? ?? ?? F3 A5 8B 45 0C A3");
+									addr = MemUtils::find_pattern(pGiveFnptrsToDll, 40, p);
+									if (addr) {
+										paranoia = true;
+									} else {
+										// Half-Payne
+										static constexpr auto p = PATTERN("BF ?? ?? ?? ?? A3 ?? ?? ?? ?? F3 A5 5F");
+										addr = MemUtils::find_pattern(pGiveFnptrsToDll, 40, p);
+										halfpayne = true;
+									}
+								}
+							}
 						}
 					}
 				}
@@ -925,6 +1103,21 @@ void ServerDLL::FindStuff()
 				{
 					pEngfuncs = *reinterpret_cast<enginefuncs_t**>(addr + 1);
 					ppGlobals = *reinterpret_cast<globalvars_t***>(addr + 18);
+				}
+				else if (hqtrilogy)
+				{
+					pEngfuncs = *reinterpret_cast<enginefuncs_t**>(addr + 1);
+					ppGlobals = *reinterpret_cast<globalvars_t***>(addr + 17);
+				}
+				else if (paranoia)
+				{
+					pEngfuncs = *reinterpret_cast<enginefuncs_t **>(addr + 1);
+					ppGlobals = *reinterpret_cast<globalvars_t ***>(addr + 11);
+				}
+				else if (halfpayne)
+				{
+					pEngfuncs = *reinterpret_cast<enginefuncs_t **>(addr + 1);
+					ppGlobals = *reinterpret_cast<globalvars_t ***>(addr + 6);
 				}
 				else
 				{
@@ -956,19 +1149,19 @@ void ServerDLL::RegisterCVarsAndCommands()
 	EngineDevMsg("[server dll] Registering CVars.\n");
 
 	#define REG(cvar) HwDLL::GetInstance().RegisterCVar(CVars::cvar)
+	REG(bxt_timer_autostop);
 	if (ORIG_PM_Jump)
 		REG(bxt_autojump);
-	if (!ORIG_PM_PreventMegaBunnyJumping)
-		CVars::bxt_bhopcap.Set("0");
-	REG(bxt_bhopcap);
-	if (ORIG_CNihilanth__DyingThink || ORIG_CNihilanth__DyingThink_Linux || ORIG_COFGeneWorm__DyingThink || ORIG_COFGeneWorm__DyingThink_Linux)
-		REG(bxt_timer_autostop);
+	if (!ORIG_PM_PreventMegaBunnyJumping && !pBhopcapWindows)
+		HwDLL::GetInstance().SetCVarValue(CVars::bxt_bhopcap, "0");
 	if (ORIG_AddToFullPack) {
 		REG(bxt_show_hidden_entities);
 		REG(bxt_show_triggers_legacy);
 	}
-	if (ORIG_CTriggerSave__SaveTouch)
+	if (ORIG_CTriggerSave__SaveTouch || ORIG_CTriggerSave__SaveTouch_Linux)
 		REG(bxt_disable_autosave);
+	if (ORIG_CChangeLevel__UseChangeLevel && ORIG_CChangeLevel__TouchChangeLevel)
+		REG(bxt_disable_changelevel);
 	#undef REG
 }
 
@@ -1031,6 +1224,9 @@ HOOK_DEF_0(ServerDLL, void, __cdecl, PM_Jump)
 		if (*reinterpret_cast<byte*>(pCZDS_Velocity_Byte) == !CVars::bxt_bhopcap.GetBool())
 			MemUtils::ReplaceBytes(reinterpret_cast<void*>(pCZDS_Velocity_Byte), 1, reinterpret_cast<const byte*>(CVars::bxt_bhopcap.GetBool() ? "\x01" : "\x00"));
 	}
+
+	if (pBhopcapWindows)
+		MemUtils::ReplaceBytes(reinterpret_cast<void*>(pBhopcapWindows), 1, reinterpret_cast<const byte*>(CVars::bxt_bhopcap.GetBool() ? "\x83" : "\x82"));
 
 	ORIG_PM_Jump();
 
@@ -1296,44 +1492,28 @@ HOOK_DEF_3(ServerDLL, void, __cdecl, CmdStart, const edict_t*, player, const use
 
 HOOK_DEF_2(ServerDLL, void, __fastcall, CNihilanth__DyingThink, void*, thisptr, int, edx)
 {
-	if (CVars::bxt_timer_autostop.GetBool())
-		CustomHud::SetCountingTime(false);
-	Interprocess::WriteGameEnd(CustomHud::GetTime());
-	CustomHud::SaveTimeToDemo();
-	RuntimeData::Add(RuntimeData::GameEndMarker {});
+	DoAutoStopTasks();
 
 	return ORIG_CNihilanth__DyingThink(thisptr, edx);
 }
 
 HOOK_DEF_1(ServerDLL, void, __cdecl, CNihilanth__DyingThink_Linux, void*, thisptr)
 {
-	if (CVars::bxt_timer_autostop.GetBool())
-		CustomHud::SetCountingTime(false);
-	Interprocess::WriteGameEnd(CustomHud::GetTime());
-	CustomHud::SaveTimeToDemo();
-	RuntimeData::Add(RuntimeData::GameEndMarker {});
+	DoAutoStopTasks();
 
 	return ORIG_CNihilanth__DyingThink_Linux(thisptr);
 }
 
 HOOK_DEF_2(ServerDLL, void, __fastcall, COFGeneWorm__DyingThink, void*, thisptr, int, edx)
 {
-	if (CVars::bxt_timer_autostop.GetBool())
-		CustomHud::SetCountingTime(false);
-	Interprocess::WriteGameEnd(CustomHud::GetTime());
-	CustomHud::SaveTimeToDemo();
-	RuntimeData::Add(RuntimeData::GameEndMarker {});
+	DoAutoStopTasks();
 
 	return ORIG_COFGeneWorm__DyingThink(thisptr, edx);
 }
 
 HOOK_DEF_1(ServerDLL, void, __cdecl, COFGeneWorm__DyingThink_Linux, void*, thisptr)
 {
-	if (CVars::bxt_timer_autostop.GetBool())
-		CustomHud::SetCountingTime(false);
-	Interprocess::WriteGameEnd(CustomHud::GetTime());
-	CustomHud::SaveTimeToDemo();
-	RuntimeData::Add(RuntimeData::GameEndMarker {});
+	DoAutoStopTasks();
 
 	return ORIG_COFGeneWorm__DyingThink_Linux(thisptr);
 }
@@ -1345,11 +1525,7 @@ HOOK_DEF_1(ServerDLL, void, __fastcall, CApache__DyingThink, void*, thisptr)
 		if (pev && pev->targetname) {
 			const char *targetname = (*ppGlobals)->pStringBase + pev->targetname;
 			if (!std::strcmp(targetname, "sheriffs_chppr")) {
-				if (CVars::bxt_timer_autostop.GetBool())
-					CustomHud::SetCountingTime(false);
-				Interprocess::WriteGameEnd(CustomHud::GetTime());
-				CustomHud::SaveTimeToDemo();
-				RuntimeData::Add(RuntimeData::GameEndMarker {});
+				DoAutoStopTasks();
 			}
 		}
 	}
@@ -1364,16 +1540,54 @@ HOOK_DEF_1(ServerDLL, void, __fastcall, CBaseDoor__DoorGoUp, void*, thisptr)
 		if (pev && pev->target) {
 			const char *target= (*ppGlobals)->pStringBase + pev->target;
 			if (!std::strcmp(target, "oil_spouts1_mm")) {
-				if (CVars::bxt_timer_autostop.GetBool())
-					CustomHud::SetCountingTime(false);
-				Interprocess::WriteGameEnd(CustomHud::GetTime());
-				CustomHud::SaveTimeToDemo();
-				RuntimeData::Add(RuntimeData::GameEndMarker {});
+				DoAutoStopTasks();
 			}
 		}
 	}
 
 	return ORIG_CBaseDoor__DoorGoUp(thisptr);
+}
+
+HOOK_DEF_1(ServerDLL, void, __fastcall, CBaseDoor__DoorHitTop, void*, thisptr)
+{
+	if (ppGlobals && pEngfuncs) {
+		entvars_t *pev = *reinterpret_cast<entvars_t**>(reinterpret_cast<uintptr_t>(thisptr) + 4);
+		edict_t *pPlayer = pEngfuncs->pfnPEntityOfEntIndex(1);
+		if (pev && pev->targetname && pPlayer) {
+			void *classPtr = pPlayer->pvPrivateData;
+			char pVolumeName[] = "lm15";
+			const char *targetname = (*ppGlobals)->pStringBase + pev->targetname;
+			const char *gameDir = "";
+
+			if (ClientDLL::GetInstance().pEngfuncs)
+				gameDir = ClientDLL::GetInstance().pEngfuncs->pfnGetGameDirectory();
+
+			if (!std::strcmp(targetname, "rocket_dr") && !std::strcmp(gameDir, "lm_txp")
+				&& ORIG_CChangeLevel__InTransitionVolume(classPtr, pVolumeName))
+				DoAutoStopTasks();
+		}
+	}
+
+	return ORIG_CBaseDoor__DoorHitTop(thisptr);
+}
+
+HOOK_DEF_4(ServerDLL, void, __fastcall, CBaseMonster__Killed, void*, thisptr, int, edx, entvars_t*, pevAttacker, int, iGib)
+{
+	if (ppGlobals) {
+		entvars_t* pev = *reinterpret_cast<entvars_t**>(reinterpret_cast<uintptr_t>(thisptr) + 4);
+		if (pev && pev->classname) {
+			const char* classname = (*ppGlobals)->pStringBase + pev->classname;
+			const char* gameDir = "";
+			if (ClientDLL::GetInstance().pEngfuncs)
+				gameDir = ClientDLL::GetInstance().pEngfuncs->pfnGetGameDirectory();
+			if ((!std::strcmp(classname, "monster_ramone") && !std::strcmp(gameDir, "wantedsp"))
+				|| (!std::strcmp(classname, "monster_gargantua") && !std::strcmp(gameDir, "tetsu0_cot"))) {
+				DoAutoStopTasks();
+			}
+		}
+	}
+
+	return ORIG_CBaseMonster__Killed(thisptr, edx, pevAttacker, iGib);
 }
 
 HOOK_DEF_2(ServerDLL, void, __fastcall, CMultiManager__ManagerThink, void*, thisptr, int, edx)
@@ -1382,60 +1596,66 @@ HOOK_DEF_2(ServerDLL, void, __fastcall, CMultiManager__ManagerThink, void*, this
 		entvars_t *pev = *reinterpret_cast<entvars_t**>(reinterpret_cast<uintptr_t>(thisptr) + 4);
 		if (pev && pev->targetname) {
 			const char *targetname = (*ppGlobals)->pStringBase + pev->targetname;
-			const char *gameDir = "";
-			if (ClientDLL::GetInstance().pEngfuncs)
-				gameDir = ClientDLL::GetInstance().pEngfuncs->pfnGetGameDirectory();
-			if (!std::strcmp(targetname, "roll_the_credits")
-				|| !std::strcmp(targetname, "youwinmulti")
-				|| !std::strcmp(targetname, "previctory_mm")
-				|| !std::strcmp(targetname, "stairscene_mngr")
-				|| !std::strcmp(targetname, "boot_radio_seq")
-				|| (!std::strcmp(targetname, "telmm") && !std::strcmp(gameDir, "biglolly")) // Big Lolly
-				|| (!std::strcmp(targetname, "mm_player_camera1") && !std::strcmp(gameDir, "htc")) // HTC
-				|| (!std::strcmp(targetname, "multimanager_1") && !std::strcmp(gameDir, "construction")) // Construction
-				|| (!std::strcmp(targetname, "the_endgame_mm") && !std::strcmp(gameDir, "gloom")) // The Gloom
-				|| (!std::strcmp(targetname, "endbox_mm0") && !std::strcmp(gameDir, "echoes")) // Echoes
-				|| (!std::strcmp(targetname, "sendmm") && !std::strcmp(gameDir, "MINIMICUS"))  // Minimicus
-				|| (!std::strcmp(targetname, "kill2") && !std::strcmp(gameDir, "before")) // Before
-				|| (!std::strcmp(targetname, "tele_in") && !std::strcmp(gameDir, "plague")) // Plague
-				|| (!std::strcmp(targetname, "exit_seq") && !std::strcmp(gameDir, "timeline2")) // Timeline 2
-				|| (!std::strcmp(targetname, "spawn_garg_sci_mm") && !std::strcmp(gameDir, "SteamLink")) // Uplink
-				|| (!std::strcmp(targetname, "medicosprey") && !std::strcmp(gameDir, "visitors"))) { // Visitors
-				if (CVars::bxt_timer_autostop.GetBool())
-					CustomHud::SetCountingTime(false);
-				Interprocess::WriteGameEnd(CustomHud::GetTime());
-				CustomHud::SaveTimeToDemo();
-				RuntimeData::Add(RuntimeData::GameEndMarker {});
-			}
+			DoMultiManagerAutoStop(targetname);
 		}
 	}
 
 	return ORIG_CMultiManager__ManagerThink(thisptr, edx);
 }
 
-HOOK_DEF_5(ServerDLL, void, __cdecl, CMultiManager__ManagerUse_Linux, void*, thisptr, void*, pActivator, void*, pCaller, int, useType, float, value)
+HOOK_DEF_5(ServerDLL, void, __cdecl, FireTargets_Linux, char*, targetName, void*, pActivator, void*, pCaller, int, useType, float, value)
 {
-	if (ppGlobals && pCaller) {
-		entvars_t *pev = *reinterpret_cast<entvars_t**>(reinterpret_cast<uintptr_t>(thisptr) + 4);
-		if (pev && pev->targetname) {
+	if(ppGlobals && targetName != NULL && pCaller) {
+		entvars_t *pev = *reinterpret_cast<entvars_t**>(reinterpret_cast<uintptr_t>(pCaller) + 4);
+		if(pev && pev->targetname)
+		{
 			const char *targetname = (*ppGlobals)->pStringBase + pev->targetname;
-			if (!std::strcmp(targetname, "roll_the_credits") || !std::strcmp(targetname, "youwinmulti")) {
-				entvars_t *callerPev = *reinterpret_cast<entvars_t**>(reinterpret_cast<uintptr_t>(pCaller) + 4);
-				if (callerPev && callerPev->targetname) {
-					const char *callerTargetname = (*ppGlobals)->pStringBase + callerPev->targetname;
-					if (!std::strcmp(callerTargetname, "mgr_take_over") || !std::strcmp(callerTargetname, "endbot")) {
-						if (CVars::bxt_timer_autostop.GetBool())
-							CustomHud::SetCountingTime(false);
-						Interprocess::WriteGameEnd(CustomHud::GetTime());
-						CustomHud::SaveTimeToDemo();
-						RuntimeData::Add(RuntimeData::GameEndMarker {});
-					}
-				}
+			const char *classname = (*ppGlobals)->pStringBase + pev->classname;
+			// We first need to check if the pCaller is a multi_manager since FireTargets can be called by anyone
+			if (!std::strcmp(classname, "multi_manager")) {
+				DoMultiManagerAutoStop(targetname);
 			}
 		}
 	}
 
-	return ORIG_CMultiManager__ManagerUse_Linux(thisptr, pActivator, pCaller, useType, value);
+	return ORIG_FireTargets_Linux(targetName, pActivator, pCaller, useType, value);
+}
+
+void ServerDLL::DoMultiManagerAutoStop(const char *targetname)
+{
+	const char *gameDir = "";
+	if (ClientDLL::GetInstance().pEngfuncs)
+		gameDir = ClientDLL::GetInstance().pEngfuncs->pfnGetGameDirectory();
+
+	if(!std::strcmp(targetname, "roll_the_credits")
+		|| !std::strcmp(targetname, "youwinmulti")
+		|| !std::strcmp(targetname, "previctory_mm")
+		|| !std::strcmp(targetname, "stairscene_mngr")
+		|| !std::strcmp(targetname, "boot_radio_seq")
+		|| !std::strcmp(targetname, "BLOOOM") // CSCZDS
+		|| (!std::strcmp(targetname, "telmm") && !std::strcmp(gameDir, "biglolly")) // Big Lolly
+		|| (!std::strcmp(targetname, "mm_player_camera1") && !std::strcmp(gameDir, "htc")) // HTC
+		|| (!std::strcmp(targetname, "multimanager_1") && !std::strcmp(gameDir, "construction")) // Construction
+		|| (!std::strcmp(targetname, "the_endgame_mm") && !std::strcmp(gameDir, "gloom")) // The Gloom
+		|| (!std::strcmp(targetname, "endbox_mm0") && !std::strcmp(gameDir, "echoes")) // Echoes
+		|| (!std::strcmp(targetname, "sendmm") && !std::strcmp(gameDir, "MINIMICUS"))  // Minimicus
+		|| (!std::strcmp(targetname, "kill2") && !std::strcmp(gameDir, "before")) // Before
+		|| (!std::strcmp(targetname, "tele_in") && !std::strcmp(gameDir, "plague")) // Plague
+		|| (!std::strcmp(targetname, "exit_seq") && !std::strcmp(gameDir, "timeline2")) // Timeline 2
+		|| (!std::strcmp(targetname, "spawn_garg_sci_mm") && !std::strcmp(gameDir, "SteamLink")) // Uplink
+		|| (!std::strcmp(targetname, "fc_mm1") && !std::strcmp(gameDir, "hc")) // Hazardous Course 2
+		|| (!std::strcmp(targetname, "medicosprey") && !std::strcmp(gameDir, "visitors"))) { // Visitors
+		DoAutoStopTasks();
+	}
+}
+
+void ServerDLL::DoAutoStopTasks()
+{
+	if (CVars::bxt_timer_autostop.GetBool())
+		CustomHud::SetCountingTime(false);
+	Interprocess::WriteGameEnd(CustomHud::GetTime());
+	CustomHud::SaveTimeToDemo();
+	RuntimeData::Add(RuntimeData::GameEndMarker{});
 }
 
 void ServerDLL::GetTriggerColor(const char *classname, bool inactive, bool additive, float &r, float &g, float &b, float &a)
@@ -1755,6 +1975,22 @@ std::vector<const Vector *> ServerDLL::GetNodePositions() const
 	return positions;
 }
 
+std::vector<const Vector *> ServerDLL::GetDisplacerTargets() const
+{
+	std::vector<const Vector *> targets;
+	edict_t *pent = nullptr;
+
+	for (;;) {
+		pent = pEngfuncs->pfnFindEntityByString(pent, "classname", "info_displacer_earth_target");
+		if (!pent || !pEngfuncs->pfnEntOffsetOfPEntity(pent))
+			break;
+
+		targets.push_back(&pent->v.origin);
+	}
+
+	return targets;
+}
+
 bool ServerDLL::GetNihilanthInfo(float &health, int &level, int &irritation, bool &recharger, int &nspheres, int &sequence, float &frame) const
 {
 	if (offNihilanthLevel == 0
@@ -1925,4 +2161,28 @@ HOOK_DEF_3(ServerDLL, void, __fastcall, CTriggerSave__SaveTouch, void*, thisptr,
 		return;
 
 	return ORIG_CTriggerSave__SaveTouch(thisptr, edx, pOther);
+}
+
+HOOK_DEF_2(ServerDLL, void, __cdecl, CTriggerSave__SaveTouch_Linux, void*, thisptr, void*, pOther)
+{
+	if (CVars::bxt_disable_autosave.GetBool())
+		return;
+
+	return ORIG_CTriggerSave__SaveTouch_Linux(thisptr, pOther);
+}
+
+HOOK_DEF_6(ServerDLL, void, __fastcall, CChangeLevel__UseChangeLevel, void*, thisptr, int, edx, void*, pActivator, void*, pCaller, int, useType, float, value)
+{
+	if (CVars::bxt_disable_changelevel.GetBool())
+		return;
+
+	return ORIG_CChangeLevel__UseChangeLevel(thisptr, edx, pActivator, pCaller, useType, value);
+}
+
+HOOK_DEF_3(ServerDLL, void, __fastcall, CChangeLevel__TouchChangeLevel, void*, thisptr, int, edx, void*, pOther)
+{
+	if (CVars::bxt_disable_changelevel.GetBool())
+		return;
+
+	return ORIG_CChangeLevel__TouchChangeLevel(thisptr, edx, pOther);
 }

@@ -43,6 +43,19 @@ namespace TriangleDrawing
 		}
 	}
 
+	static void DrawDisplacerTargets(triangleapi_s* pTriAPI)
+	{
+		if (!CVars::bxt_show_displacer_earth_targets.GetBool())
+			return;
+
+		pTriAPI->RenderMode(kRenderTransAdd);
+		pTriAPI->CullFace(TRI_NONE);
+		pTriAPI->Color4f(0.0f, 0.627f, 0.0f, 1.0f);
+		for (const Vector* position : ServerDLL::GetInstance().GetDisplacerTargets()) {
+			TriangleUtils::DrawPyramid(pTriAPI, *position, 5, 15);
+		}
+	}
+
 	// From util.cpp of HLSDK.
 	static Vector UTIL_ClampVectorToBox(const Vector &input, const Vector &clampSize)
 	{
@@ -86,7 +99,7 @@ namespace TriangleDrawing
 		Vector forward, right, up;
 		ClientDLL::GetInstance().pEngfuncs->pfnAngleVectors(player->v.v_angle, forward, right, up);
 
-		const auto si = CustomHud::GetScreenInfo();
+		const auto& si = CustomHud::GetScreenInfo();
 		const auto min_resolution = std::min(si.iHeight, si.iWidth);
 		const auto half_size_pixels = min_resolution / 30.0f;
 		const Vector2D half_size(TriangleUtils::PixelWidthToProportion(half_size_pixels), TriangleUtils::PixelHeightToProportion(half_size_pixels));
@@ -223,7 +236,23 @@ namespace TriangleDrawing
 			auto corner_positions = trigger.get_corner_positions();
 
 			pTriAPI->RenderMode(kRenderTransAdd);
-			pTriAPI->Color4f(1.0f, 0.5f, 0.0f, 0.3f);
+
+			if (!CVars::bxt_triggers_color.IsEmpty()) {
+				unsigned r = 0, g = 0, b = 0, a = 0;
+				std::istringstream ss(CVars::bxt_triggers_color.GetString());
+				ss >> r >> g >> b >> a;
+
+				static float triggerColor[4];
+				triggerColor[0] = r / 255.0f;
+				triggerColor[1] = g / 255.0f;
+				triggerColor[2] = b / 255.0f;
+				triggerColor[3] = a / 255.0f;
+
+				pTriAPI->Color4f(triggerColor[0], triggerColor[1], triggerColor[2], triggerColor[3]);
+			} else {
+				pTriAPI->Color4f(1.0f, 0.5f, 0.0f, 0.3f);
+			}
+
 			TriangleUtils::DrawAACuboid(pTriAPI, corner_positions.first, corner_positions.second);
 
 			pTriAPI->RenderMode(kRenderTransColor);
@@ -394,6 +423,16 @@ namespace TriangleDrawing
 		}
 		right_was_pressed = right_pressed;
 
+		static bool mouse4_was_pressed = false;
+		static Vector2D mouse4_pressed_at = Vector2D(0, 0);
+		auto mouse4_pressed = (mouse_state & SDL_BUTTON(SDL_BUTTON_X1)) != 0;
+		bool mouse4_got_pressed = false;
+		if (mouse4_pressed && !mouse4_was_pressed) {
+			mouse4_got_pressed = true;
+			mouse4_pressed_at = mouse;
+		}
+		mouse4_was_pressed = mouse4_pressed;
+
 		float adjustment_speed = 1;
 
 		// Like in HwDLL::FreeCamTick().
@@ -551,7 +590,7 @@ namespace TriangleDrawing
 
 			size_t frame_limit = player_datas.size() - 1;
 
-			if (left_pressed || middle_pressed || right_pressed) {
+			if (left_pressed || middle_pressed || right_pressed || mouse4_pressed) {
 				// Don't change the selected frame bulk while dragging.
 				if (closest_edge_prev_frame_bulk_index + 1 < frame_bulk_starts.size()) {
 					closest_edge_frame = frame_bulk_starts[closest_edge_prev_frame_bulk_index + 1];
@@ -591,7 +630,7 @@ namespace TriangleDrawing
 			}
 
 			static double saved_yaw = 0;
-			if (right_got_pressed && closest_edge_frame != 0
+			if ((right_got_pressed || mouse4_got_pressed ) && closest_edge_frame != 0
 					&& input.frame_bulks[closest_edge_prev_frame_bulk_index].GetYawPresent())
 				saved_yaw = input.frame_bulks[closest_edge_prev_frame_bulk_index].GetYaw();
 
@@ -615,6 +654,7 @@ namespace TriangleDrawing
 			static Vector2D saved_lmb_diff;
 			static Vector2D saved_mmb_diff;
 			static Vector2D saved_rmb_diff;
+			static Vector2D saved_ms4_diff;
 
 			pTriAPI->Color4f(0.8f, 0.8f, 0.8f, 1);
 			for (size_t frame = 1; frame < player_datas.size(); ++frame) {
@@ -734,6 +774,16 @@ namespace TriangleDrawing
 							auto b_screen_point_px = stw_to_pixels(b_screen_point.Make2D());
 							saved_rmb_diff = (a_screen_point_px - b_screen_point_px).Normalize();
 						}
+
+						if (mouse4_got_pressed) {
+							Vector a_screen_point;
+							pTriAPI->WorldToScreen(a, a_screen_point);
+							auto a_screen_point_px = stw_to_pixels(a_screen_point.Make2D());
+							Vector b_screen_point;
+							pTriAPI->WorldToScreen(b, b_screen_point);
+							auto b_screen_point_px = stw_to_pixels(b_screen_point.Make2D());
+							saved_ms4_diff = (a_screen_point_px - b_screen_point_px).Normalize();
+						}
 					} else {
 						pTriAPI->Color4f(0.8f, 0.8f, 0.8f, 1);
 					}
@@ -782,6 +832,51 @@ namespace TriangleDrawing
 					if (frame_bulk.GetYaw() != new_yaw) {
 						stale_index = closest_edge_prev_frame_bulk_index;
 						frame_bulk.SetYaw(new_yaw);
+					}
+				}
+
+				if (mouse4_pressed && frame_bulk.GetYawPresent()) {
+					auto mouse_diff = mouse - mouse4_pressed_at;
+
+					auto amount = DotProduct(mouse_diff, saved_ms4_diff) * 0.1f * adjustment_speed;
+					auto new_yaw = saved_yaw + amount;
+
+					if (frame_bulk.GetYaw() != new_yaw) {
+						auto old_yaw = frame_bulk.GetYaw();
+
+						stale_index = closest_edge_prev_frame_bulk_index;
+						frame_bulk.SetYaw(new_yaw);
+
+						// SetYaw towards previous framebulks
+						if (closest_edge_prev_frame_bulk_index != 0) {
+							for (size_t i = closest_edge_prev_frame_bulk_index; i > 0; i--)
+							{
+								auto real_index = i - 1;
+
+								HLTAS::Frame* prev_framebulk = &(input.frame_bulks[real_index]);
+
+								if (prev_framebulk->GetYawPresent() && prev_framebulk->GetYaw() == old_yaw) {
+									stale_index = real_index;
+									prev_framebulk->SetYaw(new_yaw);
+								}
+								else {
+									break;
+								}
+							}
+						}
+
+						// SetYaw towards end of all frame bulks
+						for (size_t i = closest_edge_prev_frame_bulk_index + 1; i < input.frame_bulks.size(); i++)
+						{
+							HLTAS::Frame* next_framebulk = &(input.frame_bulks[i]);
+
+							if (next_framebulk->GetYawPresent() && next_framebulk->GetYaw() == old_yaw) {
+								next_framebulk->SetYaw(new_yaw);
+							}
+							else {
+								break;
+							}
+						}
 					}
 				}
 
@@ -997,7 +1092,7 @@ namespace TriangleDrawing
 					&& hw.tas_editor_set_run_point_and_save) {
 				auto commands = input.frame_bulks[0].Commands;
 				if (commands.empty())
-					commands = "pause;bxt_tas_editor 1";
+					commands = "stop;bxt_timer_stop;pause;bxt_tas_editor 1";
 				input.frame_bulks[closest_edge_prev_frame_bulk_index + 1].Commands = commands;
 				input.frame_bulks[0].Commands.clear();
 				hw.SaveEditedInput();
@@ -1094,6 +1189,7 @@ namespace TriangleDrawing
 
 		DrawNodes(pTriAPI);
 		DrawCineMonsters(pTriAPI);
+		DrawDisplacerTargets(pTriAPI);
 		DrawUseableEntities(pTriAPI);
 		DrawTriggers(pTriAPI);
 		DrawCustomTriggers(pTriAPI);

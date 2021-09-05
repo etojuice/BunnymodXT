@@ -29,6 +29,7 @@ class HwDLL : public IHookableNameFilterOrdered
 	HOOK_DECL(void, __cdecl, SCR_BeginLoadingPlaque)
 	HOOK_DECL(int, __cdecl, Host_FilterTime, float timePassed)
 	HOOK_DECL(int, __cdecl, V_FadeAlpha)
+	HOOK_DECL(void, __cdecl, R_DrawSkyBox)
 	HOOK_DECL(void, __cdecl, SCR_UpdateScreen)
 	HOOK_DECL(void, __cdecl, SV_Frame)
 	HOOK_DECL(int, __cdecl, SV_SpawnServer, int bIsDemo, char* server, char* startspot)
@@ -42,9 +43,15 @@ class HwDLL : public IHookableNameFilterOrdered
 	HOOK_DECL(void, __cdecl, Cmd_Exec_f)
 	HOOK_DECL(void, __cdecl, R_DrawSequentialPoly, msurface_t *surf, int face)
 	HOOK_DECL(void, __cdecl, R_Clear)
+	HOOK_DECL(void, __cdecl, R_DrawViewModel)
 	HOOK_DECL(byte *, __cdecl, Mod_LeafPVS, mleaf_t *leaf, model_t *model)
 	HOOK_DECL(void, __cdecl, SV_AddLinksToPM_, void *node, float *pmove_mins, float *pmove_maxs)
 	HOOK_DECL(void, __cdecl, SV_WriteEntitiesToClient, client_t* client, void* msg)
+	HOOK_DECL(void, __cdecl, VGuiWrap_Paint, int paintAll)
+	HOOK_DECL(int, __cdecl, DispatchDirectUserMsg, char* pszName, int iSize, void* pBuf)
+	HOOK_DECL(void, __cdecl, SV_SetMoveVars)
+	HOOK_DECL(void, __cdecl, VectorTransform, float *in1, float *in2, float *out)
+	HOOK_DECL(void, __cdecl, R_StudioCalcAttachments)
 
 	struct cmdbuf_t
 	{
@@ -135,11 +142,19 @@ public:
 
 	void RegisterCVar(CVarWrapper& cvar);
 	cvar_t* FindCVar(const char* name);
+	void SetCVarValue(CVarWrapper& cvar, const char *value);
 
 	void SetPlayerOrigin(float origin[3]);
 	void SetPlayerVelocity(float velocity[3]);
 	bool TryGettingAccurateInfo(float origin[3], float velocity[3], float& health);
 	void GetViewangles(float* va);
+	void SetViewangles(float* va);
+
+	inline bool NeedViewmodelAdjustments()
+	{
+		auto desired_viewmodel_fov = CVars::bxt_viewmodel_fov.GetFloat();
+		return (desired_viewmodel_fov > 0 && desired_viewmodel_fov < 179 && currentRenderFOV == CVars::default_fov.GetFloat());
+	}
 
 	inline bool GetIsOverridingCamera() const { return isOverridingCamera; }
 	inline void GetCameraOverrideOrigin(float origin[3]) const
@@ -266,6 +281,8 @@ public:
 	void SetFreeCam(bool enabled);
 	void FreeCamTick();
 
+	float currentRenderFOV = 0;
+
 private:
 	// Make sure to have hl.exe last here, so that it is the lowest priority.
 	HwDLL() : IHookableNameFilterOrdered({ L"hw.dll", L"hw.so", L"sw.dll", L"hl.exe" }) {};
@@ -275,6 +292,8 @@ private:
 public:
 	typedef void(__cdecl *_Con_Printf) (const char* fmt, ...);
 	_Con_Printf ORIG_Con_Printf;
+	typedef cl_entity_t*(__cdecl *_studioapi_GetCurrentEntity) ();
+	_studioapi_GetCurrentEntity ORIG_studioapi_GetCurrentEntity;
 
 	HLStrafe::PlayerData GetPlayerData();
 
@@ -314,6 +333,7 @@ protected:
 	struct Cmd_BXT_TAS_Split;
 	struct Cmd_BXT_TAS_New;
 	struct Cmd_BXT_CH_Set_Health;
+	struct Cmd_BXT_CH_Set_Angles;
 	struct Cmd_BXT_CH_Set_Armor;
 	struct Cmd_BXT_CH_Set_Origin;
 	struct Cmd_BXT_CH_Set_Origin_Offset;
@@ -343,6 +363,7 @@ protected:
 	struct Cmd_BXT_Record;
 	struct Cmd_BXT_AutoRecord;
 	struct Cmd_BXT_Interprocess_Reset;
+	struct Cmd_BXT_Interprocess_Stop;
 	struct Cmd_BXT_Map;
 	struct Cmd_BXT_Load;
 	struct Cmd_BXT_Reset_Frametime_Remainder;
@@ -402,6 +423,7 @@ protected:
 	ptrdiff_t offWorldmodel;
 	ptrdiff_t offModels;
 	ptrdiff_t offNumEdicts;
+	ptrdiff_t offMaxEdicts;
 	ptrdiff_t offEdicts;
 	svs_t *svs;
 	ptrdiff_t offEdict;
@@ -415,6 +437,8 @@ protected:
 	int *demorecording;
 	cmdalias_t* cmd_alias;
 	cvar_t **cvar_vars;
+	void *movevars;
+	ptrdiff_t offZmax;
 
 	int framesTillExecuting;
 	bool executing;
@@ -565,6 +589,7 @@ protected:
 	std::string execScript;
 	bool insideHost_Changelevel2_f;
 	bool dontStopAutorecord;
+	bool insideRStudioCalcAttachmentsViewmodel;
 
 	bool extendPlayerTraceDistanceLimit;
 };

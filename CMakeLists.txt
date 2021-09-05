@@ -52,7 +52,7 @@ if (MSVC)
 		set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:threadSafeInit-")
 	endif ()
 else ()
-	set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=pentium-m -mfpmath=387 -mno-sse -g -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-unused-variable -Wno-missing-braces")
+	set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=pentium-m -mfpmath=387 -mno-sse -g -Wall -Wextra -Wno-unused-parameter")
 
 	if (NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		# Not supported on Clang.
@@ -80,6 +80,8 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/BunnymodXT/git_revision.cpp.in" "${C
 
 find_package (Boost 1.57.0 REQUIRED)
 include_directories (SYSTEM ${Boost_INCLUDE_DIR})
+
+set (RapidJSON_ROOT "${CMAKE_SOURCE_DIR}/rapidjson")
 
 # hltas is already included as part of hlstrafe.
 add_subdirectory (hlstrafe)
@@ -134,6 +136,7 @@ set (HEADER_FILES
 	BunnymodXT/stdafx.hpp
 	BunnymodXT/triangle_drawing.hpp
 	BunnymodXT/triangle_utils.hpp
+	BunnymodXT/opengl_utils.hpp
 	BunnymodXT/TEA.hpp
 	BunnymodXT/runtime_data.hpp
 	BunnymodXT/input_editor.hpp
@@ -157,6 +160,7 @@ set (SOURCE_FILES
 	BunnymodXT/hud_custom.cpp
 	BunnymodXT/triangle_drawing.cpp
 	BunnymodXT/triangle_utils.cpp
+	BunnymodXT/opengl_utils.cpp
 	BunnymodXT/TEA.cpp
 	BunnymodXT/runtime_data.cpp
 	BunnymodXT/input_editor.cpp
@@ -200,3 +204,5 @@ else()
 	add_dependencies (BunnymodXT MinHook)
 	target_link_libraries (BunnymodXT opengl32)
 endif ()
+
+install (TARGETS BunnymodXT)

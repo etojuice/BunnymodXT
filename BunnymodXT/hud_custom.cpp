@@ -7,6 +7,7 @@
 #include "interprocess.hpp"
 #include "runtime_data.hpp"
 #include "common.hpp"
+#include "opengl_utils.hpp"
 
 #include <GL/gl.h>
 
@@ -687,7 +688,7 @@ namespace CustomHud
 				const auto ent = tr.pHit;
 
 				edict_t *edicts;
-				const auto numEdicts = hw.GetEdicts(&edicts);
+				hw.GetEdicts(&edicts);
 				const auto index = ent - edicts;
 				out << "Entity: " << index << '\n';
 
@@ -916,7 +917,6 @@ namespace CustomHud
 		if (CVars::bxt_collision_depth_map.GetBool())
 		{
 			constexpr float M_DEG2RAD = float(M_PI) / 180.f;
-			constexpr float M_RAD2DEG = 180.f / float(M_PI);
 
 			const auto hull_type = static_cast<HLStrafe::HullType>(std::clamp(CVars::bxt_collision_depth_map_hull.GetInt(), 0, 2));
 
@@ -1179,6 +1179,131 @@ namespace CustomHud
 			return false;
 		}
 		return true;
+	static void DrawCrosshair(float time)
+	{
+		if (!CVars::bxt_cross.GetBool())
+			return;
+
+		unsigned char alpha;
+		if (sscanf(CVars::bxt_cross_alpha.GetString().c_str(), "%hhu", &alpha) != 1)
+			alpha = 255;
+
+		if (alpha == 0)
+			return;
+
+		unsigned char r, g, b;
+		if (sscanf(CVars::bxt_cross_color.GetString().c_str(), "%hhu %hhu %hhu", &r, &g, &b) != 3) {
+			r = 0;
+			g = 255;
+			b = 0;
+		}
+
+		Vector2D center(si.iWidth / 2.0f, si.iHeight / 2.0f);
+
+		GLUtils gl;
+
+		// Draw the outline.
+		if (CVars::bxt_cross_outline.GetBool()) {
+			gl.color(0, 0, 0, alpha);
+			gl.line_width(CVars::bxt_cross_outline.GetFloat());
+
+			auto size = CVars::bxt_cross_size.GetFloat();
+			auto gap = CVars::bxt_cross_gap.GetFloat();
+			auto half_thickness = CVars::bxt_cross_thickness.GetFloat() / 2.0f;
+			auto half_width = CVars::bxt_cross_outline.GetFloat() / 2.0f;
+			auto offset = half_thickness + half_width;
+
+			// Top line
+			if (CVars::bxt_cross_top_line.GetBool()) {
+				gl.line(Vector2D(center.x - offset, center.y - gap - size), Vector2D(center.x + offset, center.y - gap - size));
+				gl.line(Vector2D(center.x + half_thickness, center.y - gap - size + half_width), Vector2D(center.x + half_thickness, center.y - gap - half_width));
+				gl.line(Vector2D(center.x + offset, center.y - gap), Vector2D(center.x - offset, center.y - gap));
+				gl.line(Vector2D(center.x - half_thickness, center.y - gap - half_width), Vector2D(center.x - half_thickness, center.y - gap - size + half_width));
+			}
+
+			// Bottom line
+			if (CVars::bxt_cross_bottom_line.GetBool()) {
+				gl.line(Vector2D(center.x - offset, center.y + gap + size), Vector2D(center.x + offset, center.y + gap + size));
+				gl.line(Vector2D(center.x + half_thickness, center.y + gap + size - half_width), Vector2D(center.x + half_thickness, center.y + gap + half_width));
+				gl.line(Vector2D(center.x + offset, center.y + gap), Vector2D(center.x - offset, center.y + gap));
+				gl.line(Vector2D(center.x - half_thickness, center.y + gap + half_width), Vector2D(center.x - half_thickness, center.y + gap + size - half_width));
+			}
+
+			// Left line
+			if (CVars::bxt_cross_left_line.GetBool()) {
+				gl.line(Vector2D(center.x - gap - size, center.y - offset), Vector2D(center.x - gap - size, center.y + offset));
+				gl.line(Vector2D(center.x - gap - size + half_width, center.y + half_thickness), Vector2D(center.x - gap - half_width, center.y + half_thickness));
+				gl.line(Vector2D(center.x - gap, center.y + offset), Vector2D(center.x - gap, center.y - offset));
+				gl.line(Vector2D(center.x - gap - half_width, center.y - half_thickness), Vector2D(center.x - gap - size + half_width, center.y - half_thickness));
+			}
+
+			// Right line
+			if (CVars::bxt_cross_right_line.GetBool()) {
+				gl.line(Vector2D(center.x + gap + size, center.y - offset), Vector2D(center.x + gap + size, center.y + offset));
+				gl.line(Vector2D(center.x + gap + size - half_width, center.y + half_thickness), Vector2D(center.x + gap + half_width, center.y + half_thickness));
+				gl.line(Vector2D(center.x + gap, center.y + offset), Vector2D(center.x + gap, center.y - offset));
+				gl.line(Vector2D(center.x + gap + half_width, center.y - half_thickness), Vector2D(center.x + gap + size - half_width, center.y - half_thickness));
+			}
+
+			// Dot
+			if (CVars::bxt_cross_dot_size.GetBool()) {
+				auto size = CVars::bxt_cross_dot_size.GetFloat();
+				auto offset = Vector2D(size / 2.0f, size / 2.0f);
+
+				gl.line(Vector2D(center.x - offset.x - half_width, center.y - offset.y), Vector2D(center.x + offset.x + half_width, center.y - offset.y));
+				gl.line(Vector2D(center.x + offset.x, center.y - offset.y + half_width), Vector2D(center.x + offset.x, center.y + offset.y - half_width));
+				gl.line(Vector2D(center.x - offset.x, center.y - offset.y + half_width), Vector2D(center.x - offset.x, center.y + offset.y - half_width));
+				gl.line(Vector2D(center.x - offset.x - half_width, center.y + offset.y), Vector2D(center.x + offset.x + half_width, center.y + offset.y));
+			}
+		}
+
+		gl.color(r, g, b, alpha);
+
+		// Draw the crosshairs.
+		if (CVars::bxt_cross_thickness.GetBool()) {
+			gl.line_width(CVars::bxt_cross_thickness.GetFloat());
+
+			auto size = CVars::bxt_cross_size.GetFloat();
+			auto gap = CVars::bxt_cross_gap.GetFloat();
+
+			if (CVars::bxt_cross_top_line.GetBool())
+				gl.line(Vector2D(center.x, center.y - gap - size), Vector2D(center.x, center.y - gap));
+			if (CVars::bxt_cross_bottom_line.GetBool())
+				gl.line(Vector2D(center.x, center.y + gap + size), Vector2D(center.x, center.y + gap));
+			if (CVars::bxt_cross_left_line.GetBool())
+				gl.line(Vector2D(center.x - gap - size, center.y), Vector2D(center.x - gap, center.y));
+			if (CVars::bxt_cross_right_line.GetBool())
+				gl.line(Vector2D(center.x + gap + size, center.y), Vector2D(center.x + gap, center.y));
+		}
+
+		// Draw the circle.
+		if (CVars::bxt_cross_circle_radius.GetBool()) {
+			gl.line_width(1.0f);
+
+			static float old_circle_radius = 0;
+			static std::vector<Vector2D> circle_points;
+
+			auto radius = CVars::bxt_cross_circle_radius.GetFloat();
+			if (old_circle_radius != radius) {
+				// Recompute the circle points.
+				circle_points = gl.compute_circle(radius);
+				old_circle_radius = radius;
+			}
+
+			gl.circle(center, circle_points);
+		}
+
+		// Draw the dot.
+		if (CVars::bxt_cross_dot_size.GetBool()) {
+			unsigned char r, g, b;
+			if (sscanf(CVars::bxt_cross_dot_color.GetString().c_str(), "%hhu %hhu %hhu", &r, &g, &b) == 3)
+				gl.color(r, g, b, alpha);
+
+			auto size = CVars::bxt_cross_dot_size.GetFloat();
+			auto offset = Vector2D(size / 2.0f, size / 2.0f);
+
+			gl.rectangle(center - offset, center + offset);
+		}
 	}
 
 	void Init()
@@ -1276,6 +1401,7 @@ namespace CustomHud
 		DrawTASEditorStatus();
 		DrawEntities(flTime);
 		DrawSounds();
+		DrawCrosshair(flTime);
 
 		receivedAccurateInfo = false;
 		frame_bulk_selected = false;
