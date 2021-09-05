@@ -550,6 +550,18 @@ namespace patterns
 			"HL-SteamPipe",
 			"53 55 56 8B 74 24 ?? 57 8B CE 8B 06 FF 50"
 		);
+
+		PATTERNS(CSoundEnt__ActiveList,
+			"HL-SteamPipe",
+			"A1 ?? ?? ?? ?? 85 C0 75 04 83 C8 FF C3 8B 40 58 C3",
+			"OpposingForce",
+			"A1 ?? ?? ?? ?? 85 C0 75 04 83 C8 FF C3 8B 40 64 C3"
+		);
+
+		PATTERNS(CSoundEnt__SoundPointerForIndex,
+			"HL-SteamPipe",
+			"8B 0D ?? ?? ?? ?? 85 C9 75 03 33 C0 C3 8B 44 24 04 83 F8 3F 7E 13 68 ?? ?? ?? ?? 6A 01 FF 15 ?? ?? ?? ??"
+		);
 	}
 
 	namespace client
@@ -570,18 +582,6 @@ namespace patterns
 			"55 8B EC 83 EC 1C 56 8D 4D ?? E8 ?? ?? ?? ?? 8B 45",
 			"AoMDC",
 			"55 8B EC 83 EC 5C 53 56 57 8D 4D ?? E8 ?? ?? ?? ?? 8B 45"
-		);
-
-		PATTERNS(CSoundEnt__ActiveList,
-			"HL-SteamPipe",
-			"A1 ?? ?? ?? ?? 85 C0 75 04 83 C8 FF C3 8B 40 58 C3",
-			"OpposingForce",
-			"A1 ?? ?? ?? ?? 85 C0 75 04 83 C8 FF C3 8B 40 64 C3"
-		);
-
-		PATTERNS(CSoundEnt__SoundPointerForIndex,
-			"HL-SteamPipe",
-			"8B 0D ?? ?? ?? ?? 85 C9 75 03 33 C0 C3 8B 44 24 04 83 F8 3F 7E 13 68 ?? ?? ?? ?? 6A 01 FF 15 ?? ?? ?? ??"
 		);
 	}
 
