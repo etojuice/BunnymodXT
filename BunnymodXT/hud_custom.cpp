@@ -608,6 +608,26 @@ namespace CustomHud
 		}
 	}
 
+	void DrawGameTime(float flTime)
+	{
+		if (CVars::bxt_hud_gametime.GetBool())
+		{
+			const auto& sv = ServerDLL::GetInstance();
+
+			float flGameTime = sv.GetGameTime();
+
+			int x, y;
+			GetPosition(CVars::bxt_hud_gametime_offset, CVars::bxt_hud_gametime_anchor, &x, &y, -200, (si.iCharHeight * 29) + 3);
+
+			std::ostringstream out;
+			out.setf(std::ios::fixed);
+			out.precision(precision);
+			out << "GameTime: " << flGameTime;
+
+			DrawString(x, y, out.str().c_str());
+		}
+	}
+
 	static void SetupTraceVectors(float start[3], float end[3])
 	{
 		const auto& cl = ClientDLL::GetInstance();
@@ -1339,6 +1359,7 @@ namespace CustomHud
 		DrawTASEditorStatus();
 		DrawEntities(flTime);
 		DrawCrosshair(flTime);
+		DrawGameTime(flTime);
 
 		receivedAccurateInfo = false;
 		frame_bulk_selected = false;

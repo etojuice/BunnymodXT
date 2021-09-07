@@ -105,6 +105,9 @@ namespace CVars
 	CVarWrapper bxt_hud_timer("bxt_hud_timer", "0");
 	CVarWrapper bxt_hud_timer_offset("bxt_hud_timer_offset", "");
 	CVarWrapper bxt_hud_timer_anchor("bxt_hud_timer_anchor", "0 0.5");
+	CVarWrapper bxt_hud_gametime("bxt_hud_gametime", "0");
+	CVarWrapper bxt_hud_gametime_offset("bxt_hud_gametime_offset", "");
+	CVarWrapper bxt_hud_gametime_anchor("bxt_hud_gametime_anchor", "1 0");
 	CVarWrapper bxt_hud_visible_landmarks("bxt_hud_visible_landmarks", "0");
 	CVarWrapper bxt_hud_visible_landmarks_offset("bxt_hud_visible_landmarks_offset", "");
 	CVarWrapper bxt_hud_visible_landmarks_anchor("bxt_hud_visible_landmarks_anchor", "0.5 0");

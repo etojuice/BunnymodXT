@@ -618,6 +618,9 @@ void ClientDLL::RegisterCVarsAndCommands()
 		REG(bxt_hud_timer);
 		REG(bxt_hud_timer_offset);
 		REG(bxt_hud_timer_anchor);
+		REG(bxt_hud_gametime);
+		REG(bxt_hud_gametime_offset);
+		REG(bxt_hud_gametime_anchor);
 		REG(bxt_hud_visible_landmarks);
 		REG(bxt_hud_visible_landmarks_offset);
 		REG(bxt_hud_visible_landmarks_anchor);

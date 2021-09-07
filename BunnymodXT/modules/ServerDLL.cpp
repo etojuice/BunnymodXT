@@ -1979,6 +1979,15 @@ bool ServerDLL::GetNihilanthInfo(float &health, int &level, int &irritation, boo
 	return true;
 }
 
+float ServerDLL::GetGameTime() const
+{
+	if (!ppGlobals) {
+		return 0.0;
+	}
+
+	return (*ppGlobals)->time;
+}
+
 TraceResult ServerDLL::TraceLine(const float v1[3], const float v2[3], int fNoMonsters, edict_t *pentToSkip) const
 {
 	TraceResult tr{};
