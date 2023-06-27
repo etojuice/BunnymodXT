@@ -20,6 +20,8 @@
 #include "../runtime_data.hpp"
 #include "../git_revision.hpp"
 #include "../custom_triggers.hpp"
+#include "../simulation_ipc.hpp"
+#include "../splits.hpp"
 
 using namespace std::literals;
 
@@ -55,6 +57,11 @@ extern "C" int __cdecl Host_FilterTime(float passedTime)
 extern "C" int __cdecl V_FadeAlpha()
 {
 	return HwDLL::HOOKED_V_FadeAlpha();
+}
+
+extern "C" void __cdecl V_ApplyShake(float *origin, float *angles, float factor)
+{
+	return HwDLL::HOOKED_V_ApplyShake(origin, angles, factor);
 }
 
 extern "C" void __cdecl R_DrawSkyBox()
@@ -154,6 +161,11 @@ extern "C" void __cdecl R_DrawViewModel()
 	HwDLL::HOOKED_R_DrawViewModel();
 }
 
+extern "C" void __cdecl R_PreDrawViewModel()
+{
+	HwDLL::HOOKED_R_PreDrawViewModel();
+}
+
 extern "C" byte *__cdecl Mod_LeafPVS(mleaf_t *leaf, model_t *model)
 {
 	return HwDLL::HOOKED_Mod_LeafPVS(leaf, model);
@@ -198,6 +210,113 @@ extern "C" qboolean __cdecl BIsValveGame()
 {
 	return true;
 }
+
+extern "C" void __cdecl EmitWaterPolys(msurface_t *fa, int direction)
+{
+	return HwDLL::HOOKED_EmitWaterPolys(fa, direction);
+}
+
+extern "C" void __cdecl S_StartDynamicSound(int entnum, int entchannel, void *sfx, vec_t *origin,
+                                            float fvol, float attenuation, int flags, int pitch)
+{
+	HwDLL::HOOKED_S_StartDynamicSound(entnum, entchannel, sfx, origin, fvol, attenuation, flags, pitch);
+}
+
+extern "C" long __cdecl RandomLong(long low, long high)
+{
+	return HwDLL::HOOKED_RandomLong(low, high);
+}
+
+extern "C" void __cdecl VGuiWrap2_NotifyOfServerConnect(const char *game, int IP, int port)
+{
+	HwDLL::HOOKED_VGuiWrap2_NotifyOfServerConnect(game, IP, port);
+}
+
+// BunnymodXT has a few library dependencies which are loaded before `hw.so`.
+// The dependency chain leads to `libbsd.so.0` on certain systems (e.g. Ubuntu 21.04),
+// which happens to contain functions (`MD5Init()` and such) clashing with the ones in `hw.so`.
+// `hw.so` then unintentionally links to those wrong functions which causes HL to hang.
+// Since BXT is the first in the chain, it can provide those functions and forward them to `hw.so`
+// so it uses the expected implementations, thus fixing the hang.
+extern "C" void __cdecl MD5Init(MD5Context_t *context)
+{
+	HwDLL::HOOKED_MD5Init(context);
+}
+
+extern "C" void __cdecl MD5Update(MD5Context_t *context, unsigned char const *buf, unsigned int len)
+{
+	HwDLL::HOOKED_MD5Update(context, buf, len);
+}
+
+extern "C" void __cdecl MD5Final(unsigned char digest[16], MD5Context_t *context)
+{
+	HwDLL::HOOKED_MD5Final(digest, context);
+}
+
+extern "C" void __cdecl MD5Transform(unsigned int buf[4], unsigned int const in[16])
+{
+	HwDLL::HOOKED_MD5Transform(buf, in);
+}
+
+extern "C" int __cdecl MD5_Hash_File(unsigned char digest[16], char *pszFileName, int bUsefopen, int bSeed, unsigned int seed[4])
+{
+	return HwDLL::HOOKED_MD5_Hash_File(digest, pszFileName, bUsefopen, bSeed, seed);
+}
+
+extern "C" char* __cdecl MD5_Print(unsigned char hash[16])
+{
+	return HwDLL::HOOKED_MD5_Print(hash);
+}
+
+extern "C" void __cdecl _ZN7CBaseUI10HideGameUIEv(void* thisptr)
+{
+	return HwDLL::HOOKED_CBaseUI__HideGameUI_Linux(thisptr);
+}
+
+extern "C" void __cdecl R_DrawWorld()
+{
+	HwDLL::HOOKED_R_DrawWorld();
+}
+
+extern "C" void __cdecl R_DrawParticles()
+{
+	HwDLL::HOOKED_R_DrawParticles();
+}
+
+extern "C" void __cdecl R_SetFrustum()
+{
+	HwDLL::HOOKED_R_SetFrustum();
+}
+
+extern "C" void __cdecl ClientDLL_CalcRefdef(ref_params_s *pparams)
+{
+	ClientDLL::HOOKED_V_CalcRefdef(pparams);
+}
+
+extern "C" void __cdecl SPR_Set(HSPRITE_HL hSprite, int r, int g, int b)
+{
+	HwDLL::HOOKED_SPR_Set(hSprite, r, g, b);
+}
+
+extern "C" void __cdecl DrawCrosshair(int x, int y)
+{
+	HwDLL::HOOKED_DrawCrosshair(x, y);
+}
+
+extern "C" void __cdecl Draw_FillRGBA(int x, int y, int w, int h, int r, int g, int b, int a)
+{
+	HwDLL::HOOKED_Draw_FillRGBA(x, y, w, h, r, g, b, a);
+}
+
+extern "C" void __cdecl PF_traceline_DLL(const Vector* v1, const Vector* v2, int fNoMonsters, edict_t* pentToSkip, TraceResult* ptr)
+{
+	HwDLL::HOOKED_PF_traceline_DLL(v1, v2, fNoMonsters, pentToSkip, ptr);
+}
+
+extern "C" qboolean __cdecl CL_CheckGameDirectory(char *gamedir)
+{
+	return HwDLL::HOOKED_CL_CheckGameDirectory(gamedir);
+}
 #endif
 
 void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* moduleBase, size_t moduleLength, bool needToIntercept)
@@ -220,6 +339,16 @@ void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* modul
 		number++;
 	}
 	m_HookedNumber = number;
+
+#ifdef _WIN32
+	// Make it possible to run multiple Half-Life instances.
+	auto mutex = OpenMutexA(SYNCHRONIZE, FALSE, "ValveHalfLifeLauncherMutex");
+	if (mutex) {
+		EngineMsg("Releasing the launcher mutex.\n");
+		ReleaseMutex(mutex);
+		CloseHandle(mutex);
+	}
+#endif
 
 	FindStuff();
 
@@ -265,10 +394,11 @@ void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* modul
 			MemUtils::MarkAsExecutable(ORIG_SCR_BeginLoadingPlaque);
 			MemUtils::MarkAsExecutable(ORIG_Host_FilterTime);
 			MemUtils::MarkAsExecutable(ORIG_V_FadeAlpha);
+			MemUtils::MarkAsExecutable(ORIG_V_ApplyShake);
 			MemUtils::MarkAsExecutable(ORIG_R_DrawSkyBox);
 			MemUtils::MarkAsExecutable(ORIG_SCR_UpdateScreen);
-			MemUtils::MarkAsExecutable(ORIG_SV_SpawnServer);
 			MemUtils::MarkAsExecutable(ORIG_SV_Frame);
+			MemUtils::MarkAsExecutable(ORIG_SV_SpawnServer);
 			MemUtils::MarkAsExecutable(ORIG_CL_Stop_f);
 			MemUtils::MarkAsExecutable(ORIG_Host_Loadgame_f);
 			MemUtils::MarkAsExecutable(ORIG_Host_Reload_f);
@@ -280,14 +410,35 @@ void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* modul
 			MemUtils::MarkAsExecutable(ORIG_R_DrawSequentialPoly);
 			MemUtils::MarkAsExecutable(ORIG_R_Clear);
 			MemUtils::MarkAsExecutable(ORIG_R_DrawViewModel);
+			MemUtils::MarkAsExecutable(ORIG_R_PreDrawViewModel);
 			MemUtils::MarkAsExecutable(ORIG_Mod_LeafPVS);
 			MemUtils::MarkAsExecutable(ORIG_SV_AddLinksToPM_);
 			MemUtils::MarkAsExecutable(ORIG_SV_WriteEntitiesToClient);
 			MemUtils::MarkAsExecutable(ORIG_VGuiWrap_Paint);
 			MemUtils::MarkAsExecutable(ORIG_DispatchDirectUserMsg);
 			MemUtils::MarkAsExecutable(ORIG_SV_SetMoveVars);
-			MemUtils::MarkAsExecutable(ORIG_R_StudioCalcAttachments);
 			MemUtils::MarkAsExecutable(ORIG_VectorTransform);
+			MemUtils::MarkAsExecutable(ORIG_R_StudioCalcAttachments);
+			MemUtils::MarkAsExecutable(ORIG_EmitWaterPolys);
+			MemUtils::MarkAsExecutable(ORIG_S_StartDynamicSound);
+			MemUtils::MarkAsExecutable(ORIG_VGuiWrap2_NotifyOfServerConnect);
+			MemUtils::MarkAsExecutable(ORIG_R_StudioSetupBones);
+			MemUtils::MarkAsExecutable(ORIG_CBaseUI__HideGameUI);
+			MemUtils::MarkAsExecutable(ORIG_R_DrawWorld);
+			MemUtils::MarkAsExecutable(ORIG_R_DrawParticles);
+			MemUtils::MarkAsExecutable(ORIG_BUsesSDLInput);
+			MemUtils::MarkAsExecutable(ORIG_R_StudioRenderModel);
+			MemUtils::MarkAsExecutable(ORIG_R_SetFrustum);
+			MemUtils::MarkAsExecutable(ORIG_SPR_Set);
+			MemUtils::MarkAsExecutable(ORIG_DrawCrosshair);
+			MemUtils::MarkAsExecutable(ORIG_Draw_FillRGBA);
+			MemUtils::MarkAsExecutable(ORIG_PF_traceline_DLL);
+			MemUtils::MarkAsExecutable(ORIG_CL_CheckGameDirectory);
+			MemUtils::MarkAsExecutable(ORIG_Host_ValidSave);
+			MemUtils::MarkAsExecutable(ORIG_SaveGameSlot);
+			MemUtils::MarkAsExecutable(ORIG_SCR_NetGraph);
+			MemUtils::MarkAsExecutable(ORIG_Host_Shutdown);
+			MemUtils::MarkAsExecutable(ORIG_ReleaseEntityDlls);
 		}
 
 		MemUtils::Intercept(moduleName,
@@ -303,7 +454,10 @@ void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* modul
 			ORIG_Host_Changelevel2_f, HOOKED_Host_Changelevel2_f,
 			ORIG_SCR_BeginLoadingPlaque, HOOKED_SCR_BeginLoadingPlaque,
 			ORIG_Host_FilterTime, HOOKED_Host_FilterTime,
+			ORIG_Host_ValidSave, HOOKED_Host_ValidSave,
+			ORIG_SCR_NetGraph, HOOKED_SCR_NetGraph,
 			ORIG_V_FadeAlpha, HOOKED_V_FadeAlpha,
+			ORIG_V_ApplyShake, HOOKED_V_ApplyShake,
 			ORIG_R_DrawSkyBox, HOOKED_R_DrawSkyBox,
 			ORIG_SCR_UpdateScreen, HOOKED_SCR_UpdateScreen,
 			ORIG_SV_SpawnServer, HOOKED_SV_SpawnServer,
@@ -319,6 +473,7 @@ void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* modul
 			ORIG_R_DrawSequentialPoly, HOOKED_R_DrawSequentialPoly,
 			ORIG_R_Clear, HOOKED_R_Clear,
 			ORIG_R_DrawViewModel, HOOKED_R_DrawViewModel,
+			ORIG_R_PreDrawViewModel, HOOKED_R_PreDrawViewModel,
 			ORIG_Mod_LeafPVS, HOOKED_Mod_LeafPVS,
 			ORIG_SV_AddLinksToPM_, HOOKED_SV_AddLinksToPM_,
 			ORIG_SV_WriteEntitiesToClient, HOOKED_SV_WriteEntitiesToClient,
@@ -326,8 +481,42 @@ void HwDLL::Hook(const std::wstring& moduleName, void* moduleHandle, void* modul
 			ORIG_DispatchDirectUserMsg, HOOKED_DispatchDirectUserMsg,
 			ORIG_SV_SetMoveVars, HOOKED_SV_SetMoveVars,
 			ORIG_VectorTransform, HOOKED_VectorTransform,
-			ORIG_R_StudioCalcAttachments, HOOKED_R_StudioCalcAttachments);
+			ORIG_R_StudioCalcAttachments, HOOKED_R_StudioCalcAttachments,
+			ORIG_EmitWaterPolys, HOOKED_EmitWaterPolys,
+			ORIG_S_StartDynamicSound, HOOKED_S_StartDynamicSound,
+			ORIG_VGuiWrap2_NotifyOfServerConnect, HOOKED_VGuiWrap2_NotifyOfServerConnect,
+			ORIG_R_StudioSetupBones, HOOKED_R_StudioSetupBones,
+			ORIG_CBaseUI__HideGameUI, HOOKED_CBaseUI__HideGameUI,
+			ORIG_R_DrawWorld, HOOKED_R_DrawWorld,
+			ORIG_R_DrawParticles, HOOKED_R_DrawParticles,
+			ORIG_BUsesSDLInput, HOOKED_BUsesSDLInput,
+			ORIG_R_StudioRenderModel, HOOKED_R_StudioRenderModel,
+			ORIG_R_SetFrustum, HOOKED_R_SetFrustum,
+			ORIG_SPR_Set, HOOKED_SPR_Set,
+			ORIG_DrawCrosshair, HOOKED_DrawCrosshair,
+			ORIG_Draw_FillRGBA, HOOKED_Draw_FillRGBA,
+			ORIG_PF_traceline_DLL, HOOKED_PF_traceline_DLL,
+			ORIG_CL_CheckGameDirectory, HOOKED_CL_CheckGameDirectory,
+			ORIG_SaveGameSlot, HOOKED_SaveGameSlot,
+			ORIG_ReleaseEntityDlls, HOOKED_ReleaseEntityDlls,
+			ORIG_Host_Shutdown, HOOKED_Host_Shutdown);
 	}
+
+	#ifdef _WIN32
+		#ifdef COF_BUILD
+		if (!is_cof_steam) {
+			ClientDLL::GetInstance().pEngfuncs = nullptr;
+			ServerDLL::GetInstance().pEngfuncs = nullptr;
+			MessageBox(NULL, "Loaded Bunnymod XT (CoF Steam version) in non-CoF game! Download the right version!", "Fatal Error", MB_OK | MB_ICONERROR);
+		}
+		#else
+		if (is_cof_steam) {
+			ClientDLL::GetInstance().pEngfuncs = nullptr;
+			ServerDLL::GetInstance().pEngfuncs = nullptr;
+			MessageBox(NULL, "Loaded BunnymodXT (HL version) in CoF Steam! Download the right version!", "Fatal Error", MB_OK | MB_ICONERROR);
+		}
+		#endif
+	#endif
 }
 
 void HwDLL::Unhook()
@@ -344,11 +533,13 @@ void HwDLL::Unhook()
 			ORIG_time,
 			ORIG_RandomFloat,
 			ORIG_RandomLong,
-			ORIG_RandomLong,
 			ORIG_Host_Changelevel2_f,
 			ORIG_SCR_BeginLoadingPlaque,
 			ORIG_Host_FilterTime,
+			ORIG_Host_ValidSave,
+			ORIG_SCR_NetGraph,
 			ORIG_V_FadeAlpha,
+			ORIG_V_ApplyShake,
 			ORIG_R_DrawSkyBox,
 			ORIG_SCR_UpdateScreen,
 			ORIG_SV_SpawnServer,
@@ -364,6 +555,7 @@ void HwDLL::Unhook()
 			ORIG_R_DrawSequentialPoly,
 			ORIG_R_Clear,
 			ORIG_R_DrawViewModel,
+			ORIG_R_PreDrawViewModel,
 			ORIG_Mod_LeafPVS,
 			ORIG_SV_AddLinksToPM_,
 			ORIG_SV_WriteEntitiesToClient,
@@ -371,7 +563,25 @@ void HwDLL::Unhook()
 			ORIG_DispatchDirectUserMsg,
 			ORIG_SV_SetMoveVars,
 			ORIG_VectorTransform,
-			ORIG_R_StudioCalcAttachments);
+			ORIG_R_StudioCalcAttachments,
+			ORIG_EmitWaterPolys,
+			ORIG_S_StartDynamicSound,
+			ORIG_VGuiWrap2_NotifyOfServerConnect,
+			ORIG_R_StudioSetupBones,
+			ORIG_CBaseUI__HideGameUI,
+			ORIG_R_DrawWorld,
+			ORIG_R_DrawParticles,
+			ORIG_BUsesSDLInput,
+			ORIG_R_StudioRenderModel,
+			ORIG_R_SetFrustum,
+			ORIG_SPR_Set,
+			ORIG_DrawCrosshair,
+			ORIG_Draw_FillRGBA,
+			ORIG_PF_traceline_DLL,
+			ORIG_CL_CheckGameDirectory,
+			ORIG_SaveGameSlot,
+			ORIG_ReleaseEntityDlls,
+			ORIG_Host_Shutdown);
 	}
 
 	for (auto cvar : CVars::allCVars)
@@ -392,7 +602,10 @@ void HwDLL::Clear()
 	ORIG_Host_Changelevel2_f = nullptr;
 	ORIG_SCR_BeginLoadingPlaque = nullptr;
 	ORIG_Host_FilterTime = nullptr;
+	ORIG_Host_ValidSave = nullptr;
+	ORIG_SCR_NetGraph = nullptr;
 	ORIG_V_FadeAlpha = nullptr;
+	ORIG_V_ApplyShake = nullptr;
 	ORIG_R_DrawSkyBox = nullptr;
 	ORIG_SCR_UpdateScreen = nullptr;
 	ORIG_SV_Frame = nullptr;
@@ -410,11 +623,13 @@ void HwDLL::Clear()
 	ORIG_Cvar_RegisterVariable = nullptr;
 	ORIG_Cvar_DirectSet = nullptr;
 	ORIG_Cvar_FindVar = nullptr;
+	ORIG_Cmd_FindCmd = nullptr;
+	ORIG_Host_Notarget_f = nullptr;
+	ORIG_Host_Noclip_f = nullptr;
 	ORIG_Cmd_AddMallocCommand = nullptr;
 	ORIG_Cmd_Argc = nullptr;
 	ORIG_Cmd_Args = nullptr;
 	ORIG_Cmd_Argv = nullptr;
-	ORIG_hudGetViewAngles = nullptr;
 	ORIG_PM_PlayerTrace = nullptr;
 	ORIG_SV_AddLinksToPM = nullptr;
 	ORIG_PF_GetPhysicsKeyValue = nullptr;
@@ -426,15 +641,50 @@ void HwDLL::Clear()
 	ORIG_R_DrawSequentialPoly = nullptr;
 	ORIG_R_Clear = nullptr;
 	ORIG_R_DrawViewModel = nullptr;
+	ORIG_R_PreDrawViewModel = nullptr;
 	ORIG_Mod_LeafPVS = nullptr;
 	ORIG_SV_AddLinksToPM_ = nullptr;
 	ORIG_SV_WriteEntitiesToClient = nullptr;
 	ORIG_VGuiWrap_Paint = nullptr;
 	ORIG_DispatchDirectUserMsg = nullptr;
 	ORIG_SV_SetMoveVars = nullptr;
-	ORIG_studioapi_GetCurrentEntity = nullptr;
 	ORIG_R_StudioCalcAttachments = nullptr;
 	ORIG_VectorTransform = nullptr;
+	ORIG_EmitWaterPolys = nullptr;
+	ORIG_S_StartDynamicSound = nullptr;
+	ORIG_VGuiWrap2_NotifyOfServerConnect = nullptr;
+	ORIG_R_StudioSetupBones = nullptr;
+	ORIG_MD5Init = nullptr;
+	ORIG_MD5Update = nullptr;
+	ORIG_MD5Final = nullptr;
+	ORIG_MD5Transform = nullptr;
+	ORIG_MD5_Hash_File = nullptr;
+	ORIG_MD5_Print = nullptr;
+	ORIG_CBaseUI__HideGameUI = nullptr;
+	ORIG_CBaseUI__HideGameUI_Linux = nullptr;
+	ORIG_R_DrawWorld = nullptr;
+	ORIG_R_DrawParticles = nullptr;
+	ORIG_BUsesSDLInput = nullptr;
+	ORIG_R_StudioRenderModel = nullptr;
+	ORIG_R_SetFrustum = nullptr;
+	ORIG_SPR_Set = nullptr;
+	ORIG_DrawCrosshair = nullptr;
+	ORIG_Draw_FillRGBA = nullptr;
+	ORIG_PF_traceline_DLL = nullptr;
+	ORIG_CL_CheckGameDirectory = nullptr;
+	ORIG_CL_HudMessage = nullptr;
+	ORIG_SaveGameSlot = nullptr;
+	ORIG_SCR_NetGraph = nullptr;
+	ORIG_VGuiWrap2_IsGameUIVisible = nullptr;
+	ORIG_SCR_DrawPause = nullptr;
+	ORIG_Host_Shutdown = nullptr;
+	ORIG_ReleaseEntityDlls = nullptr;
+
+	ClientDLL::GetInstance().pEngfuncs = nullptr;
+	ServerDLL::GetInstance().pEngfuncs = nullptr;
+	ppGlobals = nullptr;
+	pEngStudio = nullptr;
+	pEngineAPI = nullptr;
 
 	registeredVarsAndCmds = false;
 	autojump = false;
@@ -446,11 +696,12 @@ void HwDLL::Clear()
 	autoRecordNow = false;
 	insideHost_Loadgame_f = false;
 	insideHost_Reload_f = false;
+	offActiveAddr = 0;
+	pcl = nullptr;
 	cls = nullptr;
-	clientstate = nullptr;
-	sv = nullptr;
+	psv = nullptr;
+	lastRecordedHealth = 0;
 	offTime = 0;
-	offWorldmodel = 0;
 	offModels = 0;
 	offNumEdicts = 0;
 	offMaxEdicts = 0;
@@ -466,8 +717,12 @@ void HwDLL::Clear()
 	host_frametime = nullptr;
 	cvar_vars = nullptr;
 	movevars = nullptr;
-	offZmax = 0;
+	pHost_FilterTime_FPS_Cap_Byte = 0;
+	cofSaveHack = nullptr;
+	noclip_anglehack = nullptr;
 	frametime_remainder = nullptr;
+	pstudiohdr = nullptr;
+	scr_fov_value = nullptr;
 	framesTillExecuting = 0;
 	executing = false;
 	insideCbuf_Execute = false;
@@ -477,15 +732,19 @@ void HwDLL::Clear()
 	recording = false;
 	pauseOnTheFirstFrame = false;
 	insideSeedRNG = false;
+	insideSStartDynamicSound = false;
 	LastRandomSeed = 0;
 	player = HLStrafe::PlayerData();
 	currentRepeat = 0;
+	movementFrameCounter = 0;
 	thisFrameIs0ms = false;
 	currentKeys.ResetStates();
 	CountingSharedRNGSeed = false;
 	SharedRNGSeedCounter = 0;
 	QueuedSharedRNGSeeds = 0;
 	LoadingSeedCounter = 0;
+	TargetYawOverrideIndex = 0;
+	TargetYawOverrides.clear();
 	lastLoadedMap.clear();
 	isOverridingCamera = false;
 	isOffsettingCamera = false;
@@ -495,8 +754,8 @@ void HwDLL::Clear()
 	insideHost_Changelevel2_f = false;
 	dontStopAutorecord = false;
 	insideRStudioCalcAttachmentsViewmodel = false;
+	insideHideGameUI = false;
 	hltas_filename.clear();
-	newTASStartingCommand.clear();
 	newTASFilename.clear();
 	newTASResult.Clear();
 	libTASExportFile.close();
@@ -505,9 +764,16 @@ void HwDLL::Clear()
 	tas_editor_input = EditedInput();
 	tas_editor_delete_point = false;
 	tas_editor_insert_point = false;
+	tas_editor_insert_point_held = false;
+	tas_editor_toggle_s00 = false;
+	tas_editor_toggle_s01 = false;
 	tas_editor_toggle_s03 = false;
+	tas_editor_toggle_s10 = false;
+	tas_editor_toggle_s11 = false;
 	tas_editor_toggle_s13 = false;
 	tas_editor_toggle_s22 = false;
+	tas_editor_toggle_s06 = false;
+	tas_editor_toggle_s07 = false;
 	tas_editor_toggle_lgagst = false;
 	tas_editor_toggle_autojump = false;
 	tas_editor_toggle_ducktap = false;
@@ -528,12 +794,15 @@ void HwDLL::Clear()
 	tas_editor_toggle_attack1 = false;
 	tas_editor_toggle_attack2 = false;
 	tas_editor_toggle_reload = false;
+	tas_editor_set_frametime = false;
 	tas_editor_set_yaw = false;
 	tas_editor_set_pitch = false;
 	tas_editor_set_repeats = false;
 	tas_editor_set_commands = false;
+	tas_editor_set_left_right_count = false;
 	tas_editor_unset_yaw = false;
 	tas_editor_unset_pitch = false;
+	tas_editor_apply_smoothing = false;
 	tas_editor_set_run_point_and_save = false;
 	free_cam_active = false;
 	extendPlayerTraceDistanceLimit = false;
@@ -551,6 +820,8 @@ void HwDLL::Clear()
 		totalFrames = 0;
 		StrafeState = HLStrafe::CurrentState();
 		PrevStrafeState = HLStrafe::CurrentState();
+		PrevFractions = {1, 0, 0, 0 };
+		PrevNormalzs = {0, 0, 0, 0 };
 		SharedRNGSeedPresent = false;
 		SharedRNGSeed = 0;
 		ButtonsPresent = false;
@@ -574,11 +845,10 @@ void HwDLL::FindStuff()
 		} else
 			EngineDevWarning("[hw dll] Could not find cls.\n");
 
-		sv = MemUtils::GetSymbolAddress(m_Handle, "sv");
-		if (sv) {
-			EngineDevMsg("[hw dll] Found sv at %p.\n", sv);
+		psv = MemUtils::GetSymbolAddress(m_Handle, "sv");
+		if (psv) {
+			EngineDevMsg("[hw dll] Found sv at %p.\n", psv);
 			offTime = 0xc;
-			offWorldmodel = 296;
 			offModels = 0x30948;
 			offNumEdicts = 0x3bc50;
 			offMaxEdicts = 0x3bc54;
@@ -637,28 +907,21 @@ void HwDLL::FindStuff()
 
 		host_frametime = reinterpret_cast<double*>(MemUtils::GetSymbolAddress(m_Handle, "host_frametime"));
 		if (host_frametime)
-			EngineDevMsg("[hw dll] Found host_frametime at %p.\n", sv);
+			EngineDevMsg("[hw dll] Found host_frametime at %p.\n", host_frametime);
 		else
 			EngineDevWarning("[hw dll] Could not find host_frametime.\n");
 
 		cvar_vars = reinterpret_cast<cvar_t**>(MemUtils::GetSymbolAddress(m_Handle, "cvar_vars"));
 		if (cvar_vars)
-			EngineDevMsg("[hw dll] Found cvar_vars at %p.\n", sv);
+			EngineDevMsg("[hw dll] Found cvar_vars at %p.\n", cvar_vars);
 		else
 			EngineDevWarning("[hw dll] Could not find cvar_vars.\n");
 
-		movevars = MemUtils::GetSymbolAddress(m_Handle, "movevars");
+		movevars = reinterpret_cast<movevars_t*>(MemUtils::GetSymbolAddress(m_Handle, "movevars"));
 		if (movevars) {
 			EngineDevMsg("[hw dll] Found movevars at %p.\n", movevars);
-			offZmax = 0x38;
 		} else
 			EngineDevWarning("[hw dll] Could not find movevars.\n");
-
-		ORIG_hudGetViewAngles = reinterpret_cast<_hudGetViewAngles>(MemUtils::GetSymbolAddress(m_Handle, "hudGetViewAngles"));
-		if (ORIG_hudGetViewAngles)
-			EngineDevMsg("[hw dll] Found hudGetViewAngles at %p.\n", ORIG_hudGetViewAngles);
-		else
-			EngineDevWarning("[hw dll] Could not find hudGetViewAngles.\n");
 
 		ORIG_SV_AddLinksToPM = reinterpret_cast<_SV_AddLinksToPM>(MemUtils::GetSymbolAddress(m_Handle, "SV_AddLinksToPM"));
 		if (ORIG_SV_AddLinksToPM)
@@ -702,16 +965,55 @@ void HwDLL::FindStuff()
 			EngineWarning("[hw dll] Weapon special effects will be misplaced when using bxt_viewmodel_fov.\n");
 		}
 
-		ORIG_studioapi_GetCurrentEntity = reinterpret_cast<_studioapi_GetCurrentEntity>(MemUtils::GetSymbolAddress(m_Handle, "studioapi_GetCurrentEntity"));
-		if (ORIG_studioapi_GetCurrentEntity)
-			EngineDevMsg("[hw dll] Found studioapi_GetCurrentEntity at %p.\n", ORIG_studioapi_GetCurrentEntity);
+		ORIG_CBaseUI__HideGameUI_Linux = reinterpret_cast<_CBaseUI__HideGameUI_Linux>(MemUtils::GetSymbolAddress(m_Handle, "_ZN7CBaseUI10HideGameUIEv"));
+		if (ORIG_CBaseUI__HideGameUI_Linux)
+			EngineDevMsg("[hw dll] Found CBaseUI::HideGameUI [Linux] at %p.\n", ORIG_CBaseUI__HideGameUI_Linux);
 		else
-		{
-			EngineDevWarning("[hw dll] Could not find studioapi_GetCurrentEntity.\n");
-			EngineWarning("[hw dll] Weapon special effects will be misplaced when using bxt_viewmodel_fov.\n");
-		}
+			EngineDevWarning("[hw dll] Could not find CBaseUI::HideGameUI [Linux].\n");
 
-		if (!cls || !sv || !svs || !svmove || !ppmove || !host_client || !sv_player || !sv_areanodes || !cmd_text || !cmd_alias || !host_frametime || !cvar_vars || !movevars || !ORIG_hudGetViewAngles || !ORIG_SV_AddLinksToPM || !ORIG_SV_SetMoveVars)
+		ppGlobals = reinterpret_cast<globalvars_t*>(MemUtils::GetSymbolAddress(m_Handle, "gGlobalVariables"));
+		if (ppGlobals)
+			EngineDevMsg("[hw dll] Found gGlobalVariables [Linux] at %p.\n", ppGlobals);
+		else
+			EngineDevWarning("[hw dll] Could not find gGlobalVariables [Linux].\n");
+
+		pEngStudio = reinterpret_cast<engine_studio_api_t*>(MemUtils::GetSymbolAddress(m_Handle, "engine_studio_api"));
+		if (pEngStudio)
+			EngineDevMsg("[hw dll] Found engine_studio_api [Linux] at %p.\n", pEngStudio);
+		else
+			EngineDevWarning("[hw dll] Could not find engine_studio_api [Linux].\n");
+
+		ORIG_SPR_Set = reinterpret_cast<_SPR_Set>(MemUtils::GetSymbolAddress(m_Handle, "SPR_Set"));
+		if (ORIG_SPR_Set)
+			EngineDevMsg("[hw dll] Found SPR_Set at %p.\n", ORIG_SPR_Set);
+		else
+			EngineDevWarning("[hw dll] Could not find SPR_Set.\n");
+
+		ORIG_DrawCrosshair = reinterpret_cast<_DrawCrosshair>(MemUtils::GetSymbolAddress(m_Handle, "DrawCrosshair"));
+		if (ORIG_DrawCrosshair)
+			EngineDevMsg("[hw dll] Found DrawCrosshair at %p.\n", ORIG_DrawCrosshair);
+		else
+			EngineDevWarning("[hw dll] Could not find DrawCrosshair.\n");
+
+		ORIG_Draw_FillRGBA = reinterpret_cast<_Draw_FillRGBA>(MemUtils::GetSymbolAddress(m_Handle, "Draw_FillRGBA"));
+		if (ORIG_Draw_FillRGBA)
+			EngineDevMsg("[hw dll] Found Draw_FillRGBA at %p.\n", ORIG_Draw_FillRGBA);
+		else
+			EngineDevWarning("[hw dll] Could not find Draw_FillRGBA.\n");
+
+		ORIG_PF_traceline_DLL = reinterpret_cast<_PF_traceline_DLL>(MemUtils::GetSymbolAddress(m_Handle, "PF_traceline_DLL"));
+		if (ORIG_PF_traceline_DLL)
+			EngineDevMsg("[hw dll] Found PF_traceline_DLL at %p.\n", ORIG_PF_traceline_DLL);
+		else
+			EngineDevWarning("[hw dll] Could not find PF_traceline_DLL.\n");
+
+		ORIG_CL_CheckGameDirectory = reinterpret_cast<_CL_CheckGameDirectory>(MemUtils::GetSymbolAddress(m_Handle, "CL_CheckGameDirectory"));
+		if (ORIG_CL_CheckGameDirectory)
+			EngineDevMsg("[hw dll] Found CL_CheckGameDirectory at %p.\n", ORIG_CL_CheckGameDirectory);
+		else
+			EngineDevWarning("[hw dll] Could not find CL_CheckGameDirectory.\n");
+
+		if (!cls || !psv || !svs || !svmove || !ppmove || !host_client || !sv_player || !sv_areanodes || !cmd_text || !cmd_alias || !host_frametime || !cvar_vars || !movevars || !ORIG_SV_AddLinksToPM || !ORIG_SV_SetMoveVars)
 			ORIG_Cbuf_Execute = nullptr;
 
 		#define FIND(f) \
@@ -727,6 +1029,7 @@ void HwDLL::FindStuff()
 		FIND(Cvar_RegisterVariable)
 		FIND(Cvar_DirectSet)
 		FIND(Cvar_FindVar)
+		FIND(Cmd_FindCmd)
 		FIND(Cbuf_InsertText)
 		FIND(Cbuf_AddText)
 		FIND(Cbuf_InsertTextLines)
@@ -737,7 +1040,7 @@ void HwDLL::FindStuff()
 		FIND(Cmd_Argv)
 		FIND(SeedRandomNumberGenerator)
 		//FIND(RandomFloat)
-		//FIND(RandomLong)
+		FIND(RandomLong)
 		FIND(Host_Changelevel2_f)
 		FIND(SCR_BeginLoadingPlaque)
 		FIND(PM_PlayerTrace)
@@ -749,6 +1052,12 @@ void HwDLL::FindStuff()
 		FIND(CL_Record_f)
 		FIND(Key_Event)
 		FIND(Cmd_Exec_f)
+		FIND(MD5Init)
+		FIND(MD5Update)
+		FIND(MD5Final)
+		FIND(MD5Transform)
+		FIND(MD5_Hash_File)
+		FIND(MD5_Print)
 		#undef FIND
 
 		ORIG_Host_FilterTime = reinterpret_cast<_Host_FilterTime>(MemUtils::GetSymbolAddress(m_Handle, "Host_FilterTime"));
@@ -762,6 +1071,12 @@ void HwDLL::FindStuff()
 			EngineDevMsg("[hw dll] Found V_FadeAlpha at %p.\n", ORIG_V_FadeAlpha);
 		else
 			EngineDevWarning("[hw dll] Could not find V_FadeAlpha.\n");
+
+		ORIG_V_ApplyShake = reinterpret_cast<_V_ApplyShake>(MemUtils::GetSymbolAddress(m_Handle, "V_ApplyShake"));
+		if (ORIG_V_ApplyShake)
+			EngineDevMsg("[hw dll] Found V_ApplyShake at %p.\n", ORIG_V_ApplyShake);
+		else
+			EngineDevWarning("[hw dll] Could not find V_ApplyShake.\n");
 
 		ORIG_R_DrawSkyBox = reinterpret_cast<_R_DrawSkyBox>(MemUtils::GetSymbolAddress(m_Handle, "R_DrawSkyBox"));
 		if (ORIG_R_DrawSkyBox) {
@@ -827,6 +1142,12 @@ void HwDLL::FindStuff()
 		else
 			EngineDevWarning("[hw dll] Could not find R_DrawViewModel.\n");
 
+		ORIG_R_PreDrawViewModel = reinterpret_cast<_R_PreDrawViewModel>(MemUtils::GetSymbolAddress(m_Handle, "R_PreDrawViewModel"));
+		if (ORIG_R_PreDrawViewModel)
+			EngineDevMsg("[hw dll] Found R_PreDrawViewModel at %p.\n", ORIG_R_PreDrawViewModel);
+		else
+			EngineDevWarning("[hw dll] Could not find R_PreDrawViewModel.\n");
+
 		ORIG_Mod_LeafPVS = reinterpret_cast<_Mod_LeafPVS>(MemUtils::GetSymbolAddress(m_Handle, "Mod_LeafPVS"));
 		if (ORIG_Mod_LeafPVS) {
 			EngineDevMsg("[hw dll] Found Mod_LeafPVS at %p.\n", ORIG_Mod_LeafPVS);
@@ -851,6 +1172,14 @@ void HwDLL::FindStuff()
 			EngineWarning("Demo crash fix in Counter-Strike: Condition Zero Deleted Scenes is not available.\n");
 		}
 
+		ORIG_EmitWaterPolys = reinterpret_cast<_EmitWaterPolys>(MemUtils::GetSymbolAddress(m_Handle, "EmitWaterPolys"));
+		if (ORIG_EmitWaterPolys) {
+			EngineDevMsg("[hw dll] Found EmitWaterPolys at %p.\n", ORIG_EmitWaterPolys);
+		} else {
+			EngineDevWarning("[hw dll] Could not find EmitWaterPolys.\n");
+			EngineWarning("bxt_water_remove has no effect.\n");
+		}
+
 		const auto CL_Move = reinterpret_cast<uintptr_t>(MemUtils::GetSymbolAddress(m_Handle, "CL_Move"));
 		if (CL_Move)
 		{
@@ -861,21 +1190,70 @@ void HwDLL::FindStuff()
 			EngineDevWarning("[hw dll] Could not find CL_Move.\n");
 			EngineWarning("_bxt_reset_frametime_remainder has no effect.\n");
 		}
+
+		ORIG_S_StartDynamicSound = reinterpret_cast<_S_StartDynamicSound>(MemUtils::GetSymbolAddress(m_Handle, "S_StartDynamicSound"));
+		if (ORIG_S_StartDynamicSound)
+			EngineDevMsg("[hw dll] Found S_StartDynamicSound at %p.\n", ORIG_S_StartDynamicSound);
+		else
+			EngineDevWarning("[hw dll] Could not find S_StartDynamicSound.\n");
+
+		ORIG_VGuiWrap2_NotifyOfServerConnect = reinterpret_cast<_VGuiWrap2_NotifyOfServerConnect>(MemUtils::GetSymbolAddress(m_Handle, "VGuiWrap2_NotifyOfServerConnect"));
+		if (ORIG_VGuiWrap2_NotifyOfServerConnect)
+			EngineDevMsg("[hw dll] Found VGuiWrap2_NotifyOfServerConnect at %p.\n", ORIG_VGuiWrap2_NotifyOfServerConnect);
+		else
+			EngineDevWarning("[hw dll] Could not find VGuiWrap2_NotifyOfServerConnect.\n");
+
+		ORIG_R_DrawWorld = reinterpret_cast<_R_DrawWorld>(MemUtils::GetSymbolAddress(m_Handle, "R_DrawWorld"));
+		if (ORIG_R_DrawWorld)
+			EngineDevMsg("[hw dll] Found R_DrawWorld at %p.\n", ORIG_R_DrawWorld);
+		else
+			EngineDevWarning("[hw dll] Could not find R_DrawWorld.\n");
+
+		ORIG_R_DrawParticles = reinterpret_cast<_R_DrawParticles>(MemUtils::GetSymbolAddress(m_Handle, "R_DrawParticles"));
+		if (ORIG_R_DrawParticles)
+			EngineDevMsg("[hw dll] Found R_DrawParticles at %p.\n", ORIG_R_DrawParticles);
+		else
+			EngineDevWarning("[hw dll] Could not find R_DrawParticles.\n");
+
+		ORIG_R_StudioRenderModel = reinterpret_cast<_R_StudioRenderModel>(MemUtils::GetSymbolAddress(m_Handle, "R_StudioRenderModel"));
+		if (ORIG_R_StudioRenderModel) {
+			EngineDevMsg("[hw dll] Found R_StudioRenderModel at %p.\n", ORIG_R_StudioRenderModel);
+		} else {
+			EngineDevWarning("[hw dll] Could not find R_StudioRenderModel.\n");
+			EngineWarning("Changing weapon viewmodel opacity is not available.\n");
+		}
+
+		scr_fov_value = reinterpret_cast<float*>(MemUtils::GetSymbolAddress(m_Handle, "scr_fov_value"));
+		if (scr_fov_value)
+			EngineDevMsg("[hw dll] Found scr_fov_value at %p.\n", scr_fov_value);
+		else
+			EngineDevWarning("[hw dll] Could not find scr_fov_value.\n");
+
+		ORIG_R_SetFrustum = reinterpret_cast<_R_SetFrustum>(MemUtils::GetSymbolAddress(m_Handle, "R_SetFrustum"));
+		if (ORIG_R_SetFrustum) {
+			EngineDevMsg("[hw dll] Found R_SetFrustum at %p.\n", ORIG_R_SetFrustum);
+		} else {
+			EngineDevWarning("[hw dll] Could not find R_SetFrustum.\n");
+		}
 	}
 	else
 	{
 		#define DEF_FUTURE(name) auto f##name = FindAsync(ORIG_##name, patterns::engine::name);
 		DEF_FUTURE(Cvar_DirectSet)
 		DEF_FUTURE(Cvar_FindVar)
+		DEF_FUTURE(Cmd_FindCmd)
+		DEF_FUTURE(Host_Noclip_f)
+		DEF_FUTURE(Host_Notarget_f)
 		DEF_FUTURE(Cbuf_InsertText)
 		DEF_FUTURE(Cbuf_AddText)
 		DEF_FUTURE(Cmd_AddMallocCommand)
 		//DEF_FUTURE(RandomFloat)
-		//DEF_FUTURE(RandomLong)
+		DEF_FUTURE(RandomLong)
 		DEF_FUTURE(SCR_BeginLoadingPlaque)
 		DEF_FUTURE(PM_PlayerTrace)
 		DEF_FUTURE(Host_FilterTime)
 		DEF_FUTURE(V_FadeAlpha)
+		DEF_FUTURE(V_ApplyShake)
 		DEF_FUTURE(R_DrawSkyBox)
 		DEF_FUTURE(SCR_UpdateScreen)
 		DEF_FUTURE(PF_GetPhysicsKeyValue)
@@ -888,15 +1266,35 @@ void HwDLL::FindStuff()
 		DEF_FUTURE(R_DrawSequentialPoly)
 		DEF_FUTURE(R_Clear)
 		DEF_FUTURE(R_DrawViewModel)
+		DEF_FUTURE(R_PreDrawViewModel)
 		DEF_FUTURE(Mod_LeafPVS)
 		DEF_FUTURE(CL_RecordHUDCommand)
 		DEF_FUTURE(CL_Record_f)
 		DEF_FUTURE(Key_Event)
 		DEF_FUTURE(SV_AddLinksToPM_)
 		DEF_FUTURE(SV_WriteEntitiesToClient)
-		DEF_FUTURE(studioapi_GetCurrentEntity)
 		DEF_FUTURE(VGuiWrap_Paint)
 		DEF_FUTURE(DispatchDirectUserMsg)
+		DEF_FUTURE(EmitWaterPolys)
+		DEF_FUTURE(S_StartDynamicSound)
+		DEF_FUTURE(VGuiWrap2_NotifyOfServerConnect)
+		DEF_FUTURE(CBaseUI__HideGameUI)
+		DEF_FUTURE(R_DrawWorld)
+		DEF_FUTURE(R_DrawParticles)
+		DEF_FUTURE(BUsesSDLInput)
+		DEF_FUTURE(R_StudioRenderModel)
+		DEF_FUTURE(SPR_Set)
+		DEF_FUTURE(DrawCrosshair)
+		DEF_FUTURE(Draw_FillRGBA)
+		DEF_FUTURE(PF_traceline_DLL)
+		DEF_FUTURE(CL_CheckGameDirectory)
+		DEF_FUTURE(SaveGameSlot)
+		DEF_FUTURE(CL_HudMessage)
+		DEF_FUTURE(SCR_NetGraph)
+		DEF_FUTURE(VGuiWrap2_IsGameUIVisible)
+		DEF_FUTURE(SCR_DrawPause)
+		DEF_FUTURE(Host_Shutdown)
+		DEF_FUTURE(ReleaseEntityDlls)
 		#undef DEF_FUTURE
 
 		bool oldEngine = (m_Name.find(L"hl.exe") != std::wstring::npos);
@@ -913,6 +1311,112 @@ void HwDLL::FindStuff()
 				});
 		}
 
+		void* ClientDLL_CheckStudioInterface;
+		auto fClientDLL_CheckStudioInterface = FindAsync(
+			ClientDLL_CheckStudioInterface,
+			patterns::engine::ClientDLL_CheckStudioInterface,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::ClientDLL_CheckStudioInterface.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					pEngStudio = *reinterpret_cast<engine_studio_api_t**>(reinterpret_cast<uintptr_t>(ClientDLL_CheckStudioInterface) + 42);
+					break;
+				case 1: // HL-4554
+					pEngStudio = *reinterpret_cast<engine_studio_api_t**>(reinterpret_cast<uintptr_t>(ClientDLL_CheckStudioInterface) + 40);
+					break;
+				case 2: // HL-WON-1712
+					pEngStudio = *reinterpret_cast<engine_studio_api_t**>(reinterpret_cast<uintptr_t>(ClientDLL_CheckStudioInterface) + 30);
+					break;
+				case 3: // CoF-5936
+					pEngStudio = *reinterpret_cast<engine_studio_api_t**>(reinterpret_cast<uintptr_t>(ClientDLL_CheckStudioInterface) + 48);
+					break;
+				}
+			});
+
+		void* Sys_EngineAPI;
+		auto fSys_EngineAPI = FindAsync(
+			Sys_EngineAPI,
+			patterns::engine::Sys_EngineAPI,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::Sys_EngineAPI.cbegin())
+				{
+				default:
+				case 0: // HL-WON-1712
+					pEngineAPI = *reinterpret_cast<engine_api_t**>(reinterpret_cast<uintptr_t>(Sys_EngineAPI) + 41);
+					break;
+				}
+			});
+
+		void* ClientDLL_Init;
+		auto fClientDLL_Init = FindAsync(
+			ClientDLL_Init,
+			patterns::engine::ClientDLL_Init,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::ClientDLL_Init.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					ClientDLL::GetInstance().pEngfuncs = *reinterpret_cast<cl_enginefunc_t**>(reinterpret_cast<uintptr_t>(ClientDLL_Init) + 181);
+					break;
+				case 1: // HL-4554
+					ClientDLL::GetInstance().pEngfuncs = *reinterpret_cast<cl_enginefunc_t**>(reinterpret_cast<uintptr_t>(ClientDLL_Init) + 226);
+					break;
+				case 2: // HL-NGHL
+					ClientDLL::GetInstance().pEngfuncs = *reinterpret_cast<cl_enginefunc_t**>(reinterpret_cast<uintptr_t>(ClientDLL_Init) + 203);
+					break;
+				case 3: // HL-WON-1712
+					ClientDLL::GetInstance().pEngfuncs = *reinterpret_cast<cl_enginefunc_t**>(reinterpret_cast<uintptr_t>(ClientDLL_Init) + 1456);
+					break;
+				case 4: // CoF-5936
+					ClientDLL::GetInstance().pEngfuncs = *reinterpret_cast<cl_enginefunc_t**>(reinterpret_cast<uintptr_t>(ClientDLL_Init) + 230);
+					break;
+				}
+			});
+
+		void* LoadThisDll;
+		auto fLoadThisDll = FindAsync(
+			LoadThisDll,
+			patterns::engine::LoadThisDll,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::LoadThisDll.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					ServerDLL::GetInstance().pEngfuncs = *reinterpret_cast<enginefuncs_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 95);
+					ppGlobals = *reinterpret_cast<globalvars_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 90);
+					break;
+				case 1: // HL-4554
+					ServerDLL::GetInstance().pEngfuncs = *reinterpret_cast<enginefuncs_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 91);
+					ppGlobals = *reinterpret_cast<globalvars_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 86);
+					break;
+				case 2: // HL-WON-1712
+					ServerDLL::GetInstance().pEngfuncs = *reinterpret_cast<enginefuncs_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 89);
+					ppGlobals = *reinterpret_cast<globalvars_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 84);
+					break;
+				case 3: // CoF-5936
+					ServerDLL::GetInstance().pEngfuncs = *reinterpret_cast<enginefuncs_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 118);
+					ppGlobals = *reinterpret_cast<globalvars_t**>(reinterpret_cast<uintptr_t>(LoadThisDll) + 113);
+					break;
+				}
+			});
+
+		auto fHost_FilterTime_FPS_Cap_Byte = FindAsync(
+			pHost_FilterTime_FPS_Cap_Byte,
+			patterns::engine::Host_FilterTime_FPS_Cap_Byte,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::Host_FilterTime_FPS_Cap_Byte.cbegin()) {
+				case 0: // HL-SteamPipe
+					pHost_FilterTime_FPS_Cap_Byte += 7;
+					break;
+				case 1: // HL-WON-1712
+					pHost_FilterTime_FPS_Cap_Byte += 11;
+					break;
+				default:
+					assert(false);
+				}
+			});
+
 		auto fCbuf_Execute = FindAsync(
 			ORIG_Cbuf_Execute,
 			patterns::engine::Cbuf_Execute,
@@ -920,6 +1424,7 @@ void HwDLL::FindStuff()
 				switch (pattern - patterns::engine::Cbuf_Execute.cbegin())
 				{
 				case 0: // HL-SteamPipe-8183
+				case 3: // HL-SteamPipe-8308
 					cmd_text = reinterpret_cast<cmdbuf_t*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cbuf_Execute) + 3));
 					break;
 				case 1: // HL-SteamPipe
@@ -928,8 +1433,8 @@ void HwDLL::FindStuff()
 				case 2: // HL-NGHL
 					cmd_text = reinterpret_cast<cmdbuf_t*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cbuf_Execute) + 2) - offsetof(cmdbuf_t, cursize));
 					break;
-				case 3: // HL-SteamPipe-8308
-					cmd_text = reinterpret_cast<cmdbuf_t*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cbuf_Execute) + 3));
+				case 4: // CoF-5936
+					cmd_text = reinterpret_cast<cmdbuf_t*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cbuf_Execute) + 21) - offsetof(cmdbuf_t, cursize));
 					break;
 				}
 			});
@@ -946,6 +1451,27 @@ void HwDLL::FindStuff()
 				case 1: // HL-NGHL
 					cvar_vars = reinterpret_cast<cvar_t**>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cvar_RegisterVariable) + 122));
 					break;
+				case 2: // CoF-5936
+					cvar_vars = reinterpret_cast<cvar_t**>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cvar_RegisterVariable) + 183));
+					break;
+				}
+			});
+
+		auto fR_SetFrustum = FindAsync(
+			ORIG_R_SetFrustum,
+			patterns::engine::R_SetFrustum,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::R_SetFrustum.cbegin())
+				{
+				case 0: // HL-SteamPipe
+					scr_fov_value = reinterpret_cast<float*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_R_SetFrustum) + 13));
+					break;
+				case 1: // HL-4554
+					scr_fov_value = reinterpret_cast<float*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_R_SetFrustum) + 10));
+					break;
+				case 2: // CoF-5936
+					scr_fov_value = reinterpret_cast<float*>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_R_SetFrustum) + 7));
+					break;
 				}
 			});
 
@@ -953,10 +1479,17 @@ void HwDLL::FindStuff()
 			ORIG_SeedRandomNumberGenerator,
 			patterns::engine::SeedRandomNumberGenerator,
 			[&](auto pattern) {
-				ORIG_time = reinterpret_cast<_time>(
-					*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_SeedRandomNumberGenerator) + 3)
-					+ reinterpret_cast<uintptr_t>(ORIG_SeedRandomNumberGenerator) + 7
-				);
+				switch (pattern - patterns::engine::SeedRandomNumberGenerator.cbegin())
+				{
+				case 0: // HL-SteamPipe
+					ORIG_time = reinterpret_cast<_time>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_SeedRandomNumberGenerator) + 3)
+						+ reinterpret_cast<uintptr_t>(ORIG_SeedRandomNumberGenerator) + 7);
+					break;
+				case 1: // CoF-5936
+					ORIG_time = reinterpret_cast<_time>(*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_SeedRandomNumberGenerator) + 6)
+						+ reinterpret_cast<uintptr_t>(ORIG_SeedRandomNumberGenerator) + 10);
+					break;
+				}
 			});
 
 		auto fCL_Stop_f = FindAsync(
@@ -968,9 +1501,9 @@ void HwDLL::FindStuff()
 				{
 				default:
 				case 0: // SteamPipe
+				case 2: // CoF-5936
 					offset = 25;
 					break;
-
 				case 1: // NGHL
 					offset = 22;
 					break;
@@ -984,7 +1517,16 @@ void HwDLL::FindStuff()
 			SCR_DrawFPS,
 			patterns::engine::SCR_DrawFPS,
 			[&](auto pattern) {
-				host_frametime = *reinterpret_cast<double**>(reinterpret_cast<uintptr_t>(SCR_DrawFPS) + 21);
+				switch (pattern - patterns::engine::SCR_DrawFPS.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					host_frametime = *reinterpret_cast<double**>(reinterpret_cast<uintptr_t>(SCR_DrawFPS) + 21);
+					break;
+				case 1: // CoF-5936
+					host_frametime = *reinterpret_cast<double**>(reinterpret_cast<uintptr_t>(SCR_DrawFPS) + 24);
+					break;
+				}
 			});
 
 		void *CL_Move;
@@ -1023,6 +1565,11 @@ void HwDLL::FindStuff()
 					offCmd_Argc = 25;
 					offCmd_Args = 78;
 					offCmd_Argv = 151;
+					break;
+				case 4: // CoF-5936
+					offCmd_Argc = 26;
+					offCmd_Args = 41;
+					offCmd_Argv = 180;
 				}
 
 				auto f = reinterpret_cast<uintptr_t>(Host_Tell_f);
@@ -1040,27 +1587,104 @@ void HwDLL::FindStuff()
 				);
 			});
 
-		void *Host_AutoSave_f;
-		auto fHost_AutoSave_f = FindAsync(
-			Host_AutoSave_f,
-			patterns::engine::Host_AutoSave_f,
+		auto fHost_ValidSave = FindAsync(
+			ORIG_Host_ValidSave,
+			patterns::engine::Host_ValidSave,
 			[&](auto pattern) {
-				auto f = reinterpret_cast<uintptr_t>(Host_AutoSave_f);
-				sv = *reinterpret_cast<void**>(f + 19);
-				offTime = 0x10;
-				offWorldmodel = 304;
-				offModels = 0x30950;
-				offNumEdicts = 0x3bc58;
-				offMaxEdicts = 0x3bc5c;
-				offEdicts = 0x3bc60;
-				ORIG_Con_Printf = reinterpret_cast<_Con_Printf>(
-					*reinterpret_cast<ptrdiff_t*>(f + 33)
-					+ (f + 37)
-					);
-				cls = *reinterpret_cast<void**>(f + 69);
-				svs = reinterpret_cast<svs_t*>(*reinterpret_cast<uintptr_t*>(f + 45) - 8);
-				offEdict = *reinterpret_cast<ptrdiff_t*>(f + 122);
-				clientstate = reinterpret_cast<void*>(*reinterpret_cast<uintptr_t*>(f + 86) - 0x2AF80);
+				auto f = reinterpret_cast<uintptr_t>(ORIG_Host_ValidSave);
+				switch (pattern - patterns::engine::Host_ValidSave.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					psv = *reinterpret_cast<void**>(f + 19);
+					offTime = 0x10;
+					ORIG_Con_Printf = reinterpret_cast<_Con_Printf>(
+						*reinterpret_cast<ptrdiff_t*>(f + 33)
+						+ (f + 37)
+						);
+					cls = *reinterpret_cast<void**>(f + 69);
+					svs = reinterpret_cast<svs_t*>(*reinterpret_cast<uintptr_t*>(f + 45) - 8);
+					offEdict = *reinterpret_cast<ptrdiff_t*>(f + 122);
+					offActiveAddr = *reinterpret_cast<uintptr_t*>(f + 0x13);
+					break;
+				case 1: // CoF-5936
+					psv = *reinterpret_cast<void**>(f + 50);
+					offTime = 0x10;
+					ORIG_Con_Printf = reinterpret_cast<_Con_Printf>(
+						*reinterpret_cast<ptrdiff_t*>(f + 63)
+						+ (f + 67)
+						);
+					cls = *reinterpret_cast<void**>(f + 105);
+					svs = reinterpret_cast<svs_t*>(*reinterpret_cast<uintptr_t*>(f + 79) - 8);
+					offEdict = *reinterpret_cast<ptrdiff_t*>(f + 182);
+					offActiveAddr = *reinterpret_cast<uintptr_t*>(f + 0x32);
+					cofSaveHack = *reinterpret_cast<qboolean**>(f + 21);
+					is_cof_steam = true;
+					break;
+				}
+			});
+
+		void* NUM_FOR_EDICT;
+		auto fNUM_FOR_EDICT = FindAsync(
+			NUM_FOR_EDICT,
+			patterns::engine::NUM_FOR_EDICT,
+			[&](auto pattern) {
+				auto f = reinterpret_cast<uintptr_t>(NUM_FOR_EDICT);
+				switch (pattern - patterns::engine::NUM_FOR_EDICT.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					offEdicts = *reinterpret_cast<uintptr_t*>(f + 8) - offActiveAddr;
+					break;
+				case 1: // HL-4554
+					offEdicts = *reinterpret_cast<uintptr_t*>(f + 6) - offActiveAddr;
+					break;
+				case 2: // CoF-5936
+					offEdicts = *reinterpret_cast<uintptr_t*>(f + 9) - offActiveAddr;
+					break;
+				}
+			});
+
+		void* CL_EntityNum;
+		auto fCL_EntityNum = FindAsync(
+			CL_EntityNum,
+			patterns::engine::CL_EntityNum,
+			[&](auto pattern) {
+				auto f = reinterpret_cast<uintptr_t>(CL_EntityNum);
+				switch (pattern - patterns::engine::CL_EntityNum.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					pcl = *reinterpret_cast<void**>(f + 0x12);
+					break;
+				case 1: // HL-4554
+					pcl = *reinterpret_cast<void**>(f + 0x10);
+					break;
+				case 2: // CoF-5936
+					pcl = *reinterpret_cast<void**>(f + 0x13);
+					break;
+				}
+			});
+
+		void* ModelFrames;
+		auto fModelFrames = FindAsync(
+			ModelFrames,
+			patterns::engine::ModelFrames,
+			[&](auto pattern) {
+				auto f = reinterpret_cast<uintptr_t>(ModelFrames);
+				switch (pattern - patterns::engine::ModelFrames.cbegin())
+				{
+				default:
+				case 0: // HL-Steampipe
+					offModels = *reinterpret_cast<uintptr_t*>(f + 0x14) - offActiveAddr;
+					break;
+				case 1: // HL-4554
+					offModels = *reinterpret_cast<uintptr_t*>(f + 0x12) - offActiveAddr;
+					break;
+				case 2: // CoF-5936
+					offModels = *reinterpret_cast<uintptr_t*>(f + 0x19) - offActiveAddr;
+					break;
+				}
 			});
 
 		void *MiddleOfSV_ReadClientMessage;
@@ -1094,6 +1718,12 @@ void HwDLL::FindStuff()
 					svmove = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 43);
 					ppmove = *reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 39);
 					sv_player = *reinterpret_cast<edict_t***>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 23);
+					break;
+				case 4: // CoF-5936.
+					host_client = *reinterpret_cast<client_t***>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 17);
+					svmove = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 57);
+					ppmove = *reinterpret_cast<void***>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 53);
+					sv_player = *reinterpret_cast<edict_t***>(reinterpret_cast<uintptr_t>(MiddleOfSV_ReadClientMessage) + 34);
 					break;
 				}
 			});
@@ -1140,6 +1770,11 @@ void HwDLL::FindStuff()
 						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Host_Changelevel2_f) + 248)
 						+ reinterpret_cast<uintptr_t>(ORIG_Host_Changelevel2_f) + 252);
 					break;
+				case 5: // CoF-5936
+					ORIG_SV_SpawnServer = reinterpret_cast<_SV_SpawnServer>(
+						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Host_Changelevel2_f) + 335)
+						+ reinterpret_cast<uintptr_t>(ORIG_Host_Changelevel2_f) + 339);
+					break;
 				}
 			});
 
@@ -1173,6 +1808,11 @@ void HwDLL::FindStuff()
 					ORIG_Cbuf_InsertTextLines = reinterpret_cast<_Cbuf_InsertTextLines>(
 						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cmd_Exec_f) + 769)
 						+ reinterpret_cast<uintptr_t>(ORIG_Cmd_Exec_f) + 773);
+					break;
+				case 5: // CoF-5936.
+					ORIG_Cbuf_InsertTextLines = reinterpret_cast<_Cbuf_InsertTextLines>(
+						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_Cmd_Exec_f) + 550)
+						+ reinterpret_cast<uintptr_t>(ORIG_Cmd_Exec_f) + 554);
 					break;
 				}
 			});
@@ -1218,6 +1858,12 @@ void HwDLL::FindStuff()
 						+ reinterpret_cast<uintptr_t>(Cmd_ExecuteString) + 20);
 					cmd_alias = *reinterpret_cast<cmdalias_t**>(reinterpret_cast<uintptr_t>(Cmd_ExecuteString) + 72);
 					break;
+				case 3: // CoF-5936.
+					ORIG_Cmd_TokenizeString = reinterpret_cast<_Cmd_TokenizeString>(
+						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(Cmd_ExecuteString) + 19)
+						+ reinterpret_cast<uintptr_t>(Cmd_ExecuteString) + 23);
+					cmd_alias = *reinterpret_cast<cmdalias_t**>(reinterpret_cast<uintptr_t>(Cmd_ExecuteString) + 149);
+					break;
 				}
 			});
 
@@ -1225,8 +1871,15 @@ void HwDLL::FindStuff()
 			ORIG_SV_SetMoveVars,
 			patterns::engine::SV_SetMoveVars,
 			[&](auto pattern) {
-				movevars = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(ORIG_SV_SetMoveVars) + 18);
-				offZmax = 0x38;
+				switch (pattern - patterns::engine::SV_SetMoveVars.cbegin())
+				{
+				case 0: // SteamPipe.
+					movevars = *reinterpret_cast<movevars_t**>(reinterpret_cast<uintptr_t>(ORIG_SV_SetMoveVars) + 18);
+					break;
+				case 1: // CoF-5936.
+					movevars = *reinterpret_cast<movevars_t**>(reinterpret_cast<uintptr_t>(ORIG_SV_SetMoveVars) + 9);
+					break;
+				}
 			}
 		);
 
@@ -1234,10 +1887,118 @@ void HwDLL::FindStuff()
 			ORIG_R_StudioCalcAttachments,
 			patterns::engine::R_StudioCalcAttachments,
 			[&](auto pattern) {
-				ORIG_VectorTransform = reinterpret_cast<_VectorTransform>(
-					*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_R_StudioCalcAttachments) + 106)
-					+ reinterpret_cast<uintptr_t>(ORIG_R_StudioCalcAttachments) + 110);
+				switch (pattern - patterns::engine::R_StudioCalcAttachments.cbegin())
+				{
+				case 0: // SteamPipe.
+					ORIG_VectorTransform = reinterpret_cast<_VectorTransform>(
+						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_R_StudioCalcAttachments) + 106)
+						+ reinterpret_cast<uintptr_t>(ORIG_R_StudioCalcAttachments) + 110);
+						break;
+				case 1: // CoF-5936.
+					ORIG_VectorTransform = reinterpret_cast<_VectorTransform>(
+						*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(ORIG_R_StudioCalcAttachments) + 157)
+						+ reinterpret_cast<uintptr_t>(ORIG_R_StudioCalcAttachments) + 161);
+					break;
+				default:
+					assert(false);
+					break;
+				}
 			});
+
+		auto fR_StudioSetupBones = FindAsync(
+			ORIG_R_StudioSetupBones,
+			patterns::engine::R_StudioSetupBones,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::R_StudioSetupBones.cbegin())
+				{
+				case 0: // SteamPipe.
+					pstudiohdr = *reinterpret_cast<studiohdr_t***>(reinterpret_cast<uintptr_t>(ORIG_R_StudioSetupBones) + 13);
+					break;
+				case 1: // 4554.
+					pstudiohdr = *reinterpret_cast<studiohdr_t***>(reinterpret_cast<uintptr_t>(ORIG_R_StudioSetupBones) + 7);
+					break;
+				case 2: // CoF-5936.
+					pstudiohdr = *reinterpret_cast<studiohdr_t***>(reinterpret_cast<uintptr_t>(ORIG_R_StudioSetupBones) + 16);
+					break;
+				default:
+					assert(false);
+					break;
+				}
+			});
+
+		void *CL_RegisterResources;
+		auto fCL_RegisterResources = FindAsync(
+			CL_RegisterResources,
+			patterns::engine::CL_RegisterResources,
+			[&](auto pattern) {
+				switch (pattern - patterns::engine::CL_RegisterResources.cbegin())
+				{
+				default:
+				case 0: // CoF-5936.
+					noclip_anglehack = *reinterpret_cast<qboolean**>(reinterpret_cast<uintptr_t>(CL_RegisterResources) + 216);
+					break;
+				case 1: // Steampipe.
+					noclip_anglehack = *reinterpret_cast<qboolean**>(reinterpret_cast<uintptr_t>(CL_RegisterResources) + 237);
+					break;
+				case 2: // 4554.
+					noclip_anglehack = *reinterpret_cast<qboolean**>(reinterpret_cast<uintptr_t>(CL_RegisterResources) + 204);
+					break;
+				}
+			});
+
+		{
+			auto pattern = fClientDLL_CheckStudioInterface.get();
+			if (ClientDLL_CheckStudioInterface) {
+				EngineDevMsg("[hw dll] Found ClientDLL_CheckStudioInterface at %p (using the %s pattern).\n", ClientDLL_CheckStudioInterface, pattern->name());
+				EngineDevMsg("[hw dll] Found engine_studio_api at %p.\n", pEngStudio);
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find ClientDLL_CheckStudioInterface.\n");
+			}
+		}
+
+		{
+			auto pattern = fSys_EngineAPI.get();
+			if (Sys_EngineAPI) {
+				EngineDevMsg("[hw dll] Found Sys_EngineAPI at %p (using the %s pattern).\n", Sys_EngineAPI, pattern->name());
+				EngineDevMsg("[hw dll] Found engineapi at %p.\n", pEngineAPI);
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find Sys_EngineAPI.\n");
+			}
+		}
+
+		{
+			auto pattern = fClientDLL_Init.get();
+			if (ClientDLL_Init) {
+				EngineDevMsg("[hw dll] Found ClientDLL_Init at %p (using the %s pattern).\n", ClientDLL_Init, pattern->name());
+				EngineDevMsg("[hw dll] Found cl_enginefuncs at %p.\n", ClientDLL::GetInstance().pEngfuncs);
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find ClientDLL_Init.\n");
+			}
+		}
+
+		{
+			auto pattern = fLoadThisDll.get();
+			if (LoadThisDll) {
+				EngineDevMsg("[hw dll] Found LoadThisDll at %p (using the %s pattern).\n", LoadThisDll, pattern->name());
+				EngineDevMsg("[hw dll] Found g_engfuncsExportedToDlls at %p.\n", ServerDLL::GetInstance().pEngfuncs);
+				EngineDevMsg("[hw dll] Found gGlobalVariables at %p.\n", ppGlobals);
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find LoadThisDll.\n");
+			}
+		}
+
+		{
+			auto pattern = fHost_FilterTime_FPS_Cap_Byte.get();
+			if (pHost_FilterTime_FPS_Cap_Byte) {
+				EngineDevMsg("[hw dll] Found Host_FilterTime FPS Cap Byte at %p (using the %s pattern).\n", pHost_FilterTime_FPS_Cap_Byte, pattern->name());
+			} else {
+				EngineDevWarning("[hw dll] Could not find Host_FilterTime FPS Cap Byte.\n");
+			}
+		}
 
 		{
 			auto pattern = fCbuf_Execute.get();
@@ -1260,17 +2021,74 @@ void HwDLL::FindStuff()
 		}
 
 		{
-			auto pattern = fHost_AutoSave_f.get();
-			if (Host_AutoSave_f) {
-				EngineDevMsg("[hw dll] Found Host_AutoSave_f at %p (using the %s pattern).\n", Host_AutoSave_f, pattern->name());
+			auto pattern = fR_SetFrustum.get();
+			if (ORIG_R_SetFrustum) {
+				EngineDevMsg("[hw dll] Found R_SetFrustum at %p (using the %s pattern).\n", ORIG_R_SetFrustum, pattern->name());
+				EngineDevMsg("[hw dll] Found scr_fov_value at %p.\n", scr_fov_value);
+			} else {
+				EngineDevWarning("[hw dll] Could not find R_SetFrustum.\n");
+			}
+		}
+
+		{
+			auto pattern = fCL_RegisterResources.get();
+			if (CL_RegisterResources) {
+				EngineDevMsg("[hw dll] Found CL_RegisterResources at %p (using the %s pattern).\n", CL_RegisterResources, pattern->name());
+				EngineDevMsg("[hw dll] Found noclip_anglehack at %p.\n", noclip_anglehack);
+			} else {
+				EngineDevWarning("[hw dll] Could not find CL_RegisterResources.\n");
+			}
+		}
+
+		{
+			auto pattern = fHost_ValidSave.get();
+			if (ORIG_Host_ValidSave) {
+				EngineDevMsg("[hw dll] Found Host_ValidSave at %p (using the %s pattern).\n", ORIG_Host_ValidSave, pattern->name());
 				EngineDevMsg("[hw dll] Found cls at %p.\n", cls);
-				EngineDevMsg("[hw dll] Found clientstate at %p.\n", clientstate);
-				EngineDevMsg("[hw dll] Found sv at %p.\n", sv);
+				EngineDevMsg("[hw dll] Found sv at %p.\n", psv);
 				EngineDevMsg("[hw dll] Found svs at %p.\n", svs);
 				EngineDevMsg("[hw dll] Found Con_Printf at %p.\n", ORIG_Con_Printf);
+				if (is_cof_steam)
+					EngineDevMsg("[hw dll] Found cof_savehack at %p.\n", cofSaveHack);
 			} else {
-				EngineDevWarning("[hw dll] Could not find Host_AutoSave_f.\n");
+				EngineDevWarning("[hw dll] Could not find Host_ValidSave.\n");
+				EngineWarning("[hw dll] Quick saving in Cry of Fear is not available.\n");
 				ORIG_Cbuf_Execute = nullptr;
+			}
+		}
+
+		{
+			auto pattern = fNUM_FOR_EDICT.get();
+			if (NUM_FOR_EDICT) {
+				EngineDevMsg("[hw dll] Found NUM_FOR_EDICT at %p (using the %s pattern).\n", NUM_FOR_EDICT, pattern->name());
+				EngineDevMsg("[hw dll] Offset to sv.edicts is %p.\n", offEdicts);
+				offMaxEdicts = offEdicts - 0x4;
+				offNumEdicts = offEdicts - 0x8;
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find NUM_FOR_EDICT.\n");
+			}
+		}
+
+		{
+			auto pattern = fCL_EntityNum.get();
+			if (CL_EntityNum) {
+				EngineDevMsg("[hw dll] Found CL_EntityNum at %p (using the %s pattern).\n", CL_EntityNum, pattern->name());
+				EngineDevMsg("[hw dll] Found cl at %p.\n", pcl);
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find CL_EntityNum.\n");
+			}
+		}
+
+		{
+			auto pattern = fModelFrames.get();
+			if (ModelFrames) {
+				EngineDevMsg("[hw dll] Found ModelFrames at %p (using the %s pattern).\n", ModelFrames, pattern->name());
+				EngineDevMsg("[hw dll] Offset to sv.models is %p.\n", offModels);
+			}
+			else {
+				EngineDevWarning("[hw dll] Could not find ModelFrames.\n");
 			}
 		}
 
@@ -1414,6 +2232,17 @@ void HwDLL::FindStuff()
 			}
 		}
 
+		{
+			auto pattern = fR_StudioSetupBones.get();
+			if (ORIG_R_StudioSetupBones) {
+				EngineDevMsg("[hw dll] Found R_StudioSetupBones at %p (using the %s pattern).\n", ORIG_R_StudioSetupBones, pattern->name());
+				EngineDevMsg("[hw dll] Found pstudiohdr at %p.\n", pstudiohdr);
+			} else {
+				EngineDevWarning("[hw dll] Could not find R_StudioSetupBones.\n");
+				EngineWarning("[hw dll] Disabling weapon viewmodel idle or equip sequences is not available.\n");
+			}
+		}
+
 		#define GET_FUTURE(future_name) \
 			{ \
 				auto pattern = f##future_name.get(); \
@@ -1426,11 +2255,12 @@ void HwDLL::FindStuff()
 			}
 		GET_FUTURE(Cvar_DirectSet)
 		GET_FUTURE(Cvar_FindVar)
+		GET_FUTURE(Cmd_FindCmd)
 		GET_FUTURE(Cbuf_InsertText)
 		GET_FUTURE(Cbuf_AddText)
 		GET_FUTURE(Cmd_AddMallocCommand)
 		//GET_FUTURE(RandomFloat)
-		//GET_FUTURE(RandomLong)
+		GET_FUTURE(RandomLong)
 		GET_FUTURE(SCR_BeginLoadingPlaque)
 		GET_FUTURE(PM_PlayerTrace)
 		GET_FUTURE(Host_Loadgame_f)
@@ -1465,6 +2295,7 @@ void HwDLL::FindStuff()
 			}
 		GET_FUTURE(Host_FilterTime);
 		GET_FUTURE(V_FadeAlpha);
+		GET_FUTURE(V_ApplyShake);
 		GET_FUTURE(R_DrawSkyBox);
 		GET_FUTURE(SV_Frame);
 		GET_FUTURE(VGuiWrap2_ConDPrintf);
@@ -1473,13 +2304,35 @@ void HwDLL::FindStuff()
 		GET_FUTURE(R_DrawSequentialPoly);
 		GET_FUTURE(R_Clear);
 		GET_FUTURE(R_DrawViewModel);
+		GET_FUTURE(R_PreDrawViewModel);
 		GET_FUTURE(Mod_LeafPVS);
 		GET_FUTURE(PF_GetPhysicsKeyValue);
 		GET_FUTURE(SV_AddLinksToPM_);
 		GET_FUTURE(SV_WriteEntitiesToClient);
 		GET_FUTURE(VGuiWrap_Paint);
 		GET_FUTURE(DispatchDirectUserMsg);
-		GET_FUTURE(studioapi_GetCurrentEntity);
+		GET_FUTURE(EmitWaterPolys);
+		GET_FUTURE(S_StartDynamicSound);
+		GET_FUTURE(VGuiWrap2_NotifyOfServerConnect);
+		GET_FUTURE(CBaseUI__HideGameUI);
+		GET_FUTURE(R_DrawWorld);
+		GET_FUTURE(R_DrawParticles);
+		GET_FUTURE(BUsesSDLInput);
+		GET_FUTURE(R_StudioRenderModel);
+		GET_FUTURE(SPR_Set);
+		GET_FUTURE(DrawCrosshair);
+		GET_FUTURE(Draw_FillRGBA);
+		GET_FUTURE(PF_traceline_DLL);
+		GET_FUTURE(CL_CheckGameDirectory);
+		GET_FUTURE(Host_Noclip_f);
+		GET_FUTURE(Host_Notarget_f);
+		GET_FUTURE(SaveGameSlot);
+		GET_FUTURE(CL_HudMessage);
+		GET_FUTURE(SCR_NetGraph);
+		GET_FUTURE(VGuiWrap2_IsGameUIVisible);
+		GET_FUTURE(SCR_DrawPause);
+		GET_FUTURE(Host_Shutdown);
+		GET_FUTURE(ReleaseEntityDlls);
 
 		if (oldEngine) {
 			GET_FUTURE(LoadAndDecryptHwDLL);
@@ -1530,36 +2383,135 @@ cvar_t* HwDLL::FindCVar(const char* name)
 	return ORIG_Cvar_FindVar(name);
 }
 
+void HwDLL::ResetStateBeforeTASPlayback()
+{
+	// Disable the input editor.
+	SetTASEditorMode(TASEditorMode::DISABLED);
+
+	runningFrames = false;
+	currentFramebulk = 0;
+	currentRepeat = 0;
+	movementFrameCounter = 0;
+	StrafeState = HLStrafe::CurrentState();
+	PrevStrafeState = HLStrafe::CurrentState();
+	PrevFractions = {1, 0, 0, 0 };
+	PrevNormalzs = {0, 0, 0, 0 };
+	ButtonsPresent = false;
+	hltas_filename.clear();
+	demoName.clear();
+	saveName.clear();
+	frametime0ms.clear();
+	hlstrafe_version = HLStrafe::MAX_SUPPORTED_VERSION;
+	SharedRNGSeedPresent = false;
+	SetNonSharedRNGSeed = false;
+	thisFrameIs0ms = false;
+	clearedImpulsesForTheFirstTime = false;
+	TargetYawOverrideIndex = 0;
+	TargetYawOverrides.clear();
+}
+
+void HwDLL::StartTASPlayback()
+{
+	if (!exportFilename.empty())
+		exportResult.ClearProperties();
+
+	bool saw_hlstrafe_version = false;
+	std::string load_command;
+	for (auto prop : input.GetProperties()) {
+		if (prop.first == "demo")
+			demoName = prop.second;
+		else if (prop.first == "save")
+			saveName = prop.second;
+		else if (prop.first == "seed") {
+			std::istringstream ss(prop.second);
+			ss >> SharedRNGSeed >> NonSharedRNGSeed;
+			SharedRNGSeedPresent = true;
+			SetNonSharedRNGSeed = true;
+		} else if (prop.first == "frametime0ms")
+			frametime0ms = prop.second;
+		else if (prop.first == "hlstrafe_version") {
+			hlstrafe_version = std::strtoul(prop.second.c_str(), nullptr, 10);
+
+			saw_hlstrafe_version = true;
+
+			if (hlstrafe_version > HLStrafe::MAX_SUPPORTED_VERSION) {
+				ORIG_Con_Printf("Error loading the script: hlstrafe_version %u is too high (maximum supported version: %u)\n", hlstrafe_version, HLStrafe::MAX_SUPPORTED_VERSION);
+				return;
+			}
+		} else if (prop.first == "load_command")
+			load_command = prop.second;
+
+		if (!exportFilename.empty())
+			exportResult.SetProperty(prop.first, prop.second);
+	}
+
+	if (saw_hlstrafe_version) {
+		if (hlstrafe_version < HLStrafe::MAX_SUPPORTED_VERSION)
+			ORIG_Con_Printf("The script's hlstrafe_version is %u, but the latest version is %u. If this is an old script, keep it as is. For new scripts, please add a \"hlstrafe_version %u\" property to get the most accurate TAS prediction.\n", hlstrafe_version, HLStrafe::MAX_SUPPORTED_VERSION, HLStrafe::MAX_SUPPORTED_VERSION);
+	} else {
+		hlstrafe_version = 1;
+		ORIG_Con_Printf("No hlstrafe_version property found in the script. If this is an old script, keep it as is, or add a \"hlstrafe_version 1\" property explicitly. For new scripts, please add a \"hlstrafe_version %u\" property to get the most accurate TAS prediction.\n", HLStrafe::MAX_SUPPORTED_VERSION);
+	}
+
+	if (!input.GetFrames().empty()) {
+		runningFrames = true;
+		wasRunningFrames = false; // So that ResetButtons() and others run in InsertCommands().
+		totalFramebulks = input.GetFrames().size();
+		HLTAS::Frame f;
+		if (GetNextMovementFrame(f)) {
+			std::ostringstream ss;
+			ss << "host_framerate " << f.Frametime.c_str() << "\n";
+			ORIG_Cbuf_InsertText(ss.str().c_str());
+		}
+
+		totalFrames = 0;
+		for (const auto& frame_bulk : input.GetFrames()) {
+			if (!frame_bulk.IsMovement())
+				continue;
+
+			totalFrames += frame_bulk.GetRepeats();
+		}
+
+		auto norefresh_until_frames = CVars::bxt_tas_norefresh_until_last_frames.GetInt();
+		if (norefresh_until_frames > 0 && totalFrames > static_cast<size_t>(norefresh_until_frames))
+			ORIG_Cbuf_InsertText("_bxt_norefresh 1\n");
+
+		// Reset the frametime remainder automatically upon starting a script.
+		// Fairly certain that's what you want in 100% of cases.
+		if (frametime_remainder)
+			*frametime_remainder = 0;
+
+		// Disable the freecam. A case could be made for it being useful, however with the
+		// current implementation it just uses the viewangles from the strafing and so isn't
+		// really useful.
+		SetFreeCam(false);
+
+		// It will be enabled by bxt_tas_write_log if needed.
+		SetTASLogging(false);
+	}
+
+	if (!load_command.empty()) {
+		load_command += '\n';
+		ORIG_Cbuf_InsertText(load_command.c_str());
+	}
+}
+
 struct HwDLL::Cmd_BXT_TAS_LoadScript
 {
 	USAGE("Usage: bxt_tas_loadscript <filename>\n");
 
-	static void handler(const char *fileName)
-	{
-		auto &hw = HwDLL::GetInstance();
+	static void handler(const char *fileName) {
+		auto& hw = HwDLL::GetInstance();
 		if (hw.resetState != ResetState::NORMAL)
 			return;
 
-		// Disable the input editor.
-		hw.SetTASEditorMode(TASEditorMode::DISABLED);
-
-		hw.runningFrames = false;
-		hw.currentFramebulk = 0;
-		hw.currentRepeat = 0;
-		hw.StrafeState = HLStrafe::CurrentState();
-		hw.PrevStrafeState = HLStrafe::CurrentState();
-		hw.ButtonsPresent = false;
-		hw.demoName.clear();
-		hw.saveName.clear();
-		hw.frametime0ms.clear();
-		hw.hlstrafe_version = HLStrafe::MAX_SUPPORTED_VERSION;
-		hw.SharedRNGSeedPresent = false;
-		hw.SetNonSharedRNGSeed = false;
-		hw.thisFrameIs0ms = false;
+		hw.ResetStateBeforeTASPlayback();
 		hw.hltas_filename = fileName;
-		hw.clearedImpulsesForTheFirstTime = false;
 
+		simulation_ipc::maybe_lock_mutex();
 		auto err = hw.input.Open(fileName);
+		simulation_ipc::maybe_unlock_mutex();
+
 		if (err.Code != HLTAS::ErrorCode::OK) {
 			const auto& message = hw.input.GetErrorMessage();
 			if (message.empty()) {
@@ -1570,81 +2522,7 @@ struct HwDLL::Cmd_BXT_TAS_LoadScript
 			return;
 		}
 
-		if (!hw.exportFilename.empty())
-			hw.exportResult.ClearProperties();
-
-		bool saw_hlstrafe_version = false;
-		for (auto prop : hw.input.GetProperties()) {
-			if (prop.first == "demo")
-				hw.demoName = prop.second;
-			else if (prop.first == "save")
-				hw.saveName = prop.second;
-			else if (prop.first == "seed") {
-				std::istringstream ss(prop.second);
-				ss >> hw.SharedRNGSeed >> hw.NonSharedRNGSeed;
-				hw.SharedRNGSeedPresent = true;
-				hw.SetNonSharedRNGSeed = true;
-			} else if (prop.first == "frametime0ms")
-				hw.frametime0ms = prop.second;
-			else if (prop.first == "hlstrafe_version") {
-				hw.hlstrafe_version = std::strtoul(prop.second.c_str(), nullptr, 10);
-
-				saw_hlstrafe_version = true;
-
-				if (hw.hlstrafe_version > HLStrafe::MAX_SUPPORTED_VERSION) {
-					hw.ORIG_Con_Printf("Error loading the script: hlstrafe_version %u is too high (maximum supported version: %u)\n", hw.hlstrafe_version, HLStrafe::MAX_SUPPORTED_VERSION);
-					return;
-				}
-			}
-
-			if (!hw.exportFilename.empty())
-				hw.exportResult.SetProperty(prop.first, prop.second);
-		}
-
-		if (saw_hlstrafe_version) {
-			if (hw.hlstrafe_version < HLStrafe::MAX_SUPPORTED_VERSION)
-				hw.ORIG_Con_Printf("The script's hlstrafe_version is %u, but the latest version is %u. If this is an old script, keep it as is. For new scripts, please add a \"hlstrafe_version %u\" property to get the most accurate TAS prediction.\n", hw.hlstrafe_version, HLStrafe::MAX_SUPPORTED_VERSION, HLStrafe::MAX_SUPPORTED_VERSION);
-		} else {
-			hw.hlstrafe_version = 1;
-			hw.ORIG_Con_Printf("No hlstrafe_version property found in the script. If this is an old script, keep it as is, or add a \"hlstrafe_version 1\" property explicitly. For new scripts, please add a \"hlstrafe_version %u\" property to get the most accurate TAS prediction.\n", HLStrafe::MAX_SUPPORTED_VERSION);
-		}
-
-		if (!hw.input.GetFrames().empty()) {
-			hw.runningFrames = true;
-			hw.wasRunningFrames = false; // So that ResetButtons() and others run in InsertCommands().
-			hw.totalFramebulks = hw.input.GetFrames().size();
-			HLTAS::Frame f;
-			if (hw.GetNextMovementFrame(f)) {
-				std::ostringstream ss;
-				ss << "host_framerate " << f.Frametime.c_str() << "\n";
-				hw.ORIG_Cbuf_InsertText(ss.str().c_str());
-			}
-
-			hw.totalFrames = 0;
-			for (const auto& frame_bulk : hw.input.GetFrames()) {
-				if (!frame_bulk.IsMovement())
-					continue;
-
-				hw.totalFrames += frame_bulk.GetRepeats();
-			}
-
-			auto norefresh_until_frames = CVars::bxt_tas_norefresh_until_last_frames.GetInt();
-			if (norefresh_until_frames > 0 && hw.totalFrames > static_cast<size_t>(norefresh_until_frames))
-				hw.ORIG_Cbuf_InsertText("_bxt_norefresh 1\n");
-
-			// Reset the frametime remainder automatically upon starting a script.
-			// Fairly certain that's what you want in 100% of cases.
-			if (hw.frametime_remainder)
-				*hw.frametime_remainder = 0;
-
-			// Disable the freecam. A case could be made for it being useful, however with the
-			// current implementation it just uses the viewangles from the strafing and so isn't
-			// really useful.
-			hw.SetFreeCam(false);
-
-			// It will be enabled by bxt_tas_write_log if needed.
-			hw.SetTASLogging(false);
-		}
+		hw.StartTASPlayback();
 	}
 };
 
@@ -1780,18 +2658,18 @@ struct HwDLL::Cmd_BXT_TAS_New
 		// Assumption: FPS below 1000 is a hard limit, which means we definitely can't set it higher than 1000.
 		const auto zero_ms_ducktap = (fps == 1000);
 
-		std::string cmd(command);
-		hw.newTASStartingCommand = cmd;
-
-		cmd += "\n";
-		hw.ORIG_Cbuf_InsertText(cmd.c_str());
-
 		hw.newTASFilename = std::string(filename) + ".hltas";
 		hw.newTASResult.Clear();
 
 		std::ostringstream oss;
 		oss << HLStrafe::MAX_SUPPORTED_VERSION;
 		hw.newTASResult.SetProperty("hlstrafe_version", oss.str());
+
+		std::string cmd(command);
+		hw.newTASResult.SetProperty("load_command", cmd);
+
+		cmd += "\n";
+		hw.ORIG_Cbuf_InsertText(cmd.c_str());
 
 		if (zero_ms_ducktap)
 			hw.newTASResult.SetProperty("frametime0ms", "0.0000000001");
@@ -1878,6 +2756,50 @@ struct HwDLL::Cmd_BXT_TAS_New
 	}
 };
 
+struct HwDLL::Cmd_BXT_TAS_Check_Position
+{
+	USAGE("Usage: _bxt_tas_check_position <x> <y> <z>\n Checks that the current player position matches the given coordinates, and if it doesn't, restarts the TAS.\n");
+
+	static void handler(float x, float y, float z)
+	{
+		auto &hw = HwDLL::GetInstance();
+
+		if (!hw.runningFrames)
+		{
+			hw.ORIG_Con_Printf("Not playing back a TAS.\n");
+			return;
+		}
+
+		const auto& origin = (*hw.sv_player)->v.origin;
+
+		if (fabs(origin.x - x) < 0.001 &&
+			fabs(origin.y - y) < 0.001 &&
+			fabs(origin.z - z) < 0.001)
+		{
+			hw.ORIG_Con_Printf("Position check succeeded.\n");
+			return;
+		}
+
+		hw.ORIG_Con_Printf("Player position %.4f %.4f %.4f doesn't match the expected position %.4f %.4f %.4f, restarting the script.\n",
+			origin.x, origin.y, origin.z, x, y, z);
+
+		const auto filename = hw.hltas_filename;
+		hw.ResetStateBeforeTASPlayback();
+		hw.hltas_filename = filename;
+
+		if (std::getenv("BXT_SCRIPT"))
+		{
+			// BXT_SCRIPT is set; assume that this TAS requires an RNG seed set at startup and restart the game.
+			hw.ORIG_Cbuf_InsertText("_restart\n");
+		}
+		else
+		{
+			// No seed, just start the playback.
+			hw.StartTASPlayback();
+		}
+	}
+};
+
 struct HwDLL::Cmd_BXT_CH_Set_Health
 {
 	USAGE("Usage: bxt_ch_set_health <health>\n");
@@ -1897,6 +2819,33 @@ struct HwDLL::Cmd_BXT_CH_Set_Armor
 	{
 		auto &hw = HwDLL::GetInstance();
 		(*hw.sv_player)->v.armorvalue = armor;
+	}
+};
+
+struct HwDLL::Cmd_BXT_Get_Origin_And_Angles
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		auto &hw = HwDLL::GetInstance();
+		auto &cl = ClientDLL::GetInstance();
+		auto &sv = ServerDLL::GetInstance();
+		float angles[3];
+		cl.pEngfuncs->GetViewAngles(angles);
+
+		float view[3], end[3];
+		cl.SetupTraceVectors(view, end);
+		const auto tr = sv.TraceLine(view, end, 0, hw.GetPlayerEdict());
+
+		hw.ORIG_Con_Printf("bxt_set_angles %f %f %f;", angles[0], angles[1], angles[2]);
+		if (CVars::bxt_hud_origin.GetInt() == 2)
+			hw.ORIG_Con_Printf("bxt_ch_set_pos %f %f %f\n", cl.last_vieworg[0], cl.last_vieworg[1], cl.last_vieworg[2]);
+		else
+			hw.ORIG_Con_Printf("bxt_ch_set_pos %f %f %f\n", (*hw.sv_player)->v.origin[0], (*hw.sv_player)->v.origin[1], (*hw.sv_player)->v.origin[2]);
+
+		hw.ORIG_Con_Printf("bxt_cam_fixed %f %f %f %f %f %f\n", cl.last_vieworg[0], cl.last_vieworg[1], cl.last_vieworg[2], angles[0], angles[1], angles[2]);
+		hw.ORIG_Con_Printf("Traced point origin: %f %f %f\n", tr.vecEndPos[0], tr.vecEndPos[1], tr.vecEndPos[2]);
 	}
 };
 
@@ -1960,28 +2909,257 @@ struct HwDLL::Cmd_BXT_CH_Set_Origin_Offset
 	}
 };
 
-struct HwDLL::Cmd_BXT_CH_Set_Angles
+struct HwDLL::Cmd_BXT_Set_Angles
 {
-	USAGE("Usage: bxt_ch_set_angles <pitch> <yaw> [roll]\n");
+	USAGE("Usage: bxt_set_angles <pitch> <yaw> [roll]\n");
 
 	static void handler(float x, float y)
 	{
-		auto &hw = HwDLL::GetInstance();
+		auto &cl = ClientDLL::GetInstance();
 		float vec[3];
 		vec[0] = x;
 		vec[1] = y;
 		vec[2] = 0.0f;
-		hw.SetViewangles(vec);
+		cl.pEngfuncs->SetViewAngles(vec);
 	}
 
 	static void handler(float x, float y, float z)
 	{
-		auto &hw = HwDLL::GetInstance();
+		auto &cl = ClientDLL::GetInstance();
 		float vec[3];
 		vec[0] = x;
 		vec[1] = y;
 		vec[2] = z;
-		hw.SetViewangles(vec);
+		cl.pEngfuncs->SetViewAngles(vec);
+	}
+};
+
+struct HwDLL::Cmd_BXT_CH_Get_Velocity
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		auto &hw = HwDLL::GetInstance();
+		const auto& vel = (*hw.sv_player)->v.velocity;
+		hw.ORIG_Con_Printf("bxt_ch_set_vel %f %f %f\n", vel.x, vel.y, vel.z);
+		hw.ORIG_Con_Printf("Velocity (XY): %f\n", vel.Length2D());
+		hw.ORIG_Con_Printf("Velocity (XYZ): %f\n", vel.Length());
+	}
+};
+
+struct HwDLL::Cmd_BXT_CH_Entity_Set_Health
+{
+	USAGE("Usage:\n"
+		"bxt_ch_entity_set_health <health>\n"
+		"bxt_ch_entity_set_health <health> <entity_index>\n"
+	);
+
+	static void handler(float hp)
+	{
+		const auto& serv = ServerDLL::GetInstance();
+		float view[3], end[3];
+		ClientDLL::GetInstance().SetupTraceVectors(view, end);
+
+		const auto tr = serv.TraceLine(view, end, 0, HwDLL::GetInstance().GetPlayerEdict());
+
+		if (tr.pHit)
+		{
+			const auto ent = tr.pHit;
+
+			ent->v.health = hp;
+		}
+	}
+
+	static void handler(float hp, int num)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+
+		if (num >= numEdicts)
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d does not exist; there are %d entities in total\n", num, numEdicts);
+			return;
+		}
+
+		edict_t* ent = edicts + num;
+		if (!hw.IsValidEdict(ent))
+			return;
+
+		ent->v.health = hp;
+	}
+};
+
+void HwDLL::TeleportMonsterToPosition(float x, float y, float z, int index)
+{
+	const auto& hw = HwDLL::GetInstance();
+	edict_t* edicts;
+	hw.GetEdicts(&edicts);
+	edict_t* ent = edicts + index;
+	if (!hw.IsValidEdict(ent))
+	{
+		hw.ORIG_Con_Printf("Error: entity with index %d is not valid\n", index);
+		return;
+	}
+
+	if (ent->v.flags & FL_MONSTER)
+	{
+		ent->v.origin[0] = x;
+		ent->v.origin[1] = y;
+		ent->v.origin[2] = z;
+	}
+}
+
+struct HwDLL::Cmd_BXT_CH_Monster_Set_Origin
+{
+	USAGE("Usage:\n"
+		"bxt_ch_monster_set_origin <entity_index>\n"
+		"bxt_ch_monster_set_origin <entity_index> <offset_z>\n"
+		"bxt_ch_monster_set_origin <x> <y> <z>\n"
+		"bxt_ch_monster_set_origin <x> <y> <z> <entity_index>\n"
+	);
+
+	static void handler(int num)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+
+		if (num >= numEdicts)
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d does not exist; there are %d entities in total\n", num, numEdicts);
+			return;
+		}
+
+		const auto& p_pos = (*hw.sv_player)->v.origin;
+		hw.TeleportMonsterToPosition(p_pos[0], p_pos[1], p_pos[2], num);
+	}
+
+	static void handler(int num, float off_z)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+
+		if (num >= numEdicts)
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d does not exist; there are %d entities in total\n", num, numEdicts);
+			return;
+		}
+
+		edict_t* ent = edicts + num;
+		if (!hw.IsValidEdict(ent))
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d is not valid\n", num);
+			return;
+		}
+
+		if (ent->v.flags & FL_MONSTER)
+		{
+			ent->v.origin[2] += off_z;
+		}
+	}
+
+	static void handler(float x, float y, float z)
+	{
+		const auto& serv = ServerDLL::GetInstance();
+		float view[3], end[3];
+		ClientDLL::GetInstance().SetupTraceVectors(view, end);
+
+		const auto tr = serv.TraceLine(view, end, 0, HwDLL::GetInstance().GetPlayerEdict());
+
+		if (tr.pHit)
+		{
+			const auto ent = tr.pHit;
+			if (ent->v.flags & FL_MONSTER)
+			{
+				ent->v.origin[0] = x;
+				ent->v.origin[1] = y;
+				ent->v.origin[2] = z;
+			}
+		}
+	}
+
+	static void handler(float x, float y, float z, int num)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+
+		if (num >= numEdicts)
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d does not exist; there are %d entities in total\n", num, numEdicts);
+			return;
+		}
+
+		hw.TeleportMonsterToPosition(x, y, z, num);
+	}
+};
+
+struct HwDLL::Cmd_BXT_CH_Get_Other_Player_Info
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		auto &hw = HwDLL::GetInstance();
+		auto &cl = ClientDLL::GetInstance();
+
+		const auto& mvtype = (*hw.sv_player)->v.movetype;
+		const auto& basevel = (*hw.sv_player)->v.basevelocity;
+		const auto& punch = (*hw.sv_player)->v.punchangle;
+
+		if (cl.pEngfuncs)
+			hw.ORIG_Con_Printf("Client maxspeed: %f\n", cl.pEngfuncs->GetClientMaxspeed());
+		hw.ORIG_Con_Printf("Movetype: %d (%s)\n", mvtype, hw.GetMovetypeName(mvtype));
+		hw.ORIG_Con_Printf("Health: %f\n", (*hw.sv_player)->v.health);
+		hw.ORIG_Con_Printf("Armor: %f\n", (*hw.sv_player)->v.armorvalue);
+		hw.ORIG_Con_Printf("Waterlevel: %d\n", (*hw.sv_player)->v.waterlevel);
+		hw.ORIG_Con_Printf("Watertype: %d\n", (*hw.sv_player)->v.watertype);
+		hw.ORIG_Con_Printf("Max health: %f\n", (*hw.sv_player)->v.max_health);
+		hw.ORIG_Con_Printf("Gravity: %f\n", (*hw.sv_player)->v.gravity);
+		hw.ORIG_Con_Printf("Friction: %f\n", (*hw.sv_player)->v.friction);
+		std::ostringstream out;
+		out << "Flags: ";
+		if ((*hw.sv_player)->v.flags & FL_CONVEYOR)
+			out << "FL_CONVEYOR; ";
+		if ((*hw.sv_player)->v.flags & FL_INWATER)
+			out << "FL_INWATER; ";
+		if ((*hw.sv_player)->v.flags & FL_GODMODE)
+			out << "FL_GODMODE; ";
+		if ((*hw.sv_player)->v.flags & FL_NOTARGET)
+			out << "FL_NOTARGET; ";
+		if ((*hw.sv_player)->v.flags & FL_ONGROUND)
+			out << "FL_ONGROUND; ";
+		if ((*hw.sv_player)->v.flags & FL_WATERJUMP)
+			out << "FL_WATERJUMP; ";
+		if ((*hw.sv_player)->v.flags & FL_FROZEN)
+			out << "FL_FROZEN; ";
+		if ((*hw.sv_player)->v.flags & FL_DUCKING)
+			out << "FL_DUCKING; ";
+		if ((*hw.sv_player)->v.flags & FL_ONTRAIN)
+			out << "FL_ONTRAIN; ";
+		out << '\n';
+		hw.ORIG_Con_Printf("%s", out.str().c_str());
+		hw.ORIG_Con_Printf("bInDuck: %d\n", (*hw.sv_player)->v.bInDuck);
+		hw.ORIG_Con_Printf("Basevelocity: %f %f %f; XY = %f; XYZ = %f\n", basevel.x, basevel.y, basevel.z, basevel.Length2D(), basevel.Length());
+		hw.ORIG_Con_Printf("Server punchangle: %f %f %f\n", punch.x, punch.y, punch.z);
+		hw.ORIG_Con_Printf("iuser1: %d; iuser2: %d; iuser3: %d; iuser4: %d\n", (*hw.sv_player)->v.iuser1, (*hw.sv_player)->v.iuser2, (*hw.sv_player)->v.iuser3, (*hw.sv_player)->v.iuser4);
+		hw.ORIG_Con_Printf("fuser1: %f; fuser2: %f; fuser3: %f; fuser4: %f\n", (*hw.sv_player)->v.fuser1, (*hw.sv_player)->v.fuser2, (*hw.sv_player)->v.fuser3, (*hw.sv_player)->v.fuser4);
+
+		const auto& vusr1 = (*hw.sv_player)->v.vuser1;
+		const auto& vusr2 = (*hw.sv_player)->v.vuser2;
+		const auto& vusr3 = (*hw.sv_player)->v.vuser3;
+		const auto& vusr4 = (*hw.sv_player)->v.vuser4;
+		hw.ORIG_Con_Printf("vuser1: %f %f %f; XY = %f; XYZ = %f\n", vusr1.x, vusr1.y, vusr1.z, vusr1.Length2D(), vusr1.Length());
+		hw.ORIG_Con_Printf("vuser2: %f %f %f; XY = %f; XYZ = %f\n", vusr2.x, vusr2.y, vusr2.z, vusr2.Length2D(), vusr2.Length());
+		hw.ORIG_Con_Printf("vuser3: %f %f %f; XY = %f; XYZ = %f\n", vusr3.x, vusr3.y, vusr3.z, vusr3.Length2D(), vusr3.Length());
+		hw.ORIG_Con_Printf("vuser4: %f %f %f; XY = %f; XYZ = %f\n", vusr4.x, vusr4.y, vusr4.z, vusr4.Length2D(), vusr4.Length());
 	}
 };
 
@@ -2059,14 +3237,23 @@ struct HwDLL::Cmd_BXT_Camera_Offset
 	}
 };
 
+void HwDLL::TimerStart()
+{
+	if (!CustomHud::GetCountingTime())
+		HwDLL::GetInstance().Called_Timer = true;
+
+	CustomHud::SaveTimeToDemo();
+	return CustomHud::SetCountingTime(true);
+}
+
 struct HwDLL::Cmd_BXT_Timer_Start
 {
 	NO_USAGE();
 
 	static void handler()
 	{
-		CustomHud::SaveTimeToDemo();
-		return CustomHud::SetCountingTime(true);
+		auto &hw = HwDLL::GetInstance();
+		return hw.TimerStart();
 	}
 };
 
@@ -2076,10 +3263,27 @@ struct HwDLL::Cmd_BXT_Timer_Stop
 
 	static void handler()
 	{
+		if (CustomHud::GetCountingTime())
+			HwDLL::GetInstance().Called_Timer = true;
+
 		CustomHud::SaveTimeToDemo();
 		return CustomHud::SetCountingTime(false);
 	}
 };
+
+void HwDLL::TimerReset()
+{
+	const auto& gt = CustomHud::GetTime();
+	int total_time = (gt.hours * 60 * 60) + (gt.minutes * 60) + gt.seconds;
+
+	if (gt.milliseconds > 0 || total_time > 0)
+		HwDLL::GetInstance().Called_Timer = true;
+
+	CustomHud::SaveTimeToDemo();
+	CustomHud::SetInvalidRun(false);
+	Splits::Reset();
+	return CustomHud::ResetTime();
+}
 
 struct HwDLL::Cmd_BXT_Timer_Reset
 {
@@ -2087,8 +3291,18 @@ struct HwDLL::Cmd_BXT_Timer_Reset
 
 	static void handler()
 	{
-		CustomHud::SaveTimeToDemo();
-		return CustomHud::ResetTime();
+		auto &hw = HwDLL::GetInstance();
+		return hw.TimerReset();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Get_Server_Time
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		HwDLL::GetInstance().ORIG_Con_Printf("Server time: %f\n", ServerDLL::GetInstance().GetTime());
 	}
 };
 
@@ -2300,7 +3514,7 @@ struct HwDLL::Cmd_BXT_Triggers_Export
 			if (!first)
 				oss << command_separator;
 
-			oss << "bxt_triggers_add "
+			oss << "bxt_triggers_add " << std::fixed << std::setprecision(1)
 				<< corners.first.x << " " << corners.first.y << " " << corners.first.z << " "
 				<< corners.second.x << " " << corners.second.y << " " << corners.second.z;
 
@@ -2469,6 +3683,17 @@ struct HwDLL::Cmd_BXT_TASLog
 	}
 };
 
+struct HwDLL::Cmd_BXT_Set_Frametime_Remainder
+{
+	NO_USAGE();
+
+	static void handler(double value)
+	{
+		if (HwDLL::GetInstance().frametime_remainder)
+			*HwDLL::GetInstance().frametime_remainder = value;
+	}
+};
+
 struct HwDLL::Cmd_BXT_Reset_Frametime_Remainder
 {
 	NO_USAGE();
@@ -2508,42 +3733,6 @@ struct HwDLL::Cmd_BXT_TAS_Editor
 			return;
 
 		HwDLL::GetInstance().SetTASEditorMode(tas_editor_mode);
-	}
-};
-
-struct HwDLL::Cmd_Plus_BXT_TAS_Editor_Append
-{
-	USAGE("Usage: +bxt_tas_editor_append\n Switches the TAS editor to append mode.\n");
-
-	static void handler()
-	{
-		auto& hw = HwDLL::GetInstance();
-
-		if (hw.tas_editor_mode == TASEditorMode::EDIT)
-			hw.SetTASEditorMode(TASEditorMode::APPEND);
-	}
-
-	static void handler(int)
-	{
-		handler();
-	}
-};
-
-struct HwDLL::Cmd_Minus_BXT_TAS_Editor_Append
-{
-	USAGE("Usage: -bxt_tas_editor_append\n Switches the TAS editor back to edit mode.\n");
-
-	static void handler()
-	{
-		auto& hw = HwDLL::GetInstance();
-
-		if (hw.tas_editor_mode == TASEditorMode::APPEND)
-			hw.SetTASEditorMode(TASEditorMode::EDIT);
-	}
-
-	static void handler(int)
-	{
-		handler();
 	}
 };
 
@@ -2608,12 +3797,7 @@ struct HwDLL::Cmd_BXT_TAS_Editor_Delete_Last_Point
 		auto& hw = HwDLL::GetInstance();
 		auto& frame_bulks = hw.tas_editor_input.frame_bulks;
 
-		if (hw.tas_editor_mode == TASEditorMode::APPEND) {
-			if (frame_bulks.size() > 1) {
-				hw.tas_editor_input.mark_as_stale(frame_bulks.size() - 2);
-				frame_bulks.erase(frame_bulks.end() - 2);
-			}
-		} else if (hw.tas_editor_mode == TASEditorMode::EDIT) {
+		if (hw.tas_editor_mode == TASEditorMode::EDIT) {
 			if (frame_bulks.size() > 0) {
 				hw.tas_editor_input.mark_as_stale(frame_bulks.size() - 1);
 				frame_bulks.erase(frame_bulks.end() - 1);
@@ -2642,12 +3826,67 @@ struct HwDLL::Cmd_BXT_TAS_Editor_Insert_Point
 	}
 };
 
+struct HwDLL::Cmd_Plus_BXT_TAS_Editor_Insert_Point
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		HwDLL::GetInstance().tas_editor_insert_point = true;
+		HwDLL::GetInstance().tas_editor_insert_point_held = true;
+	}
+
+	static void handler(int)
+	{
+		handler();
+	}
+};
+
+struct HwDLL::Cmd_Minus_BXT_TAS_Editor_Insert_Point
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		HwDLL::GetInstance().tas_editor_insert_point = false;
+		HwDLL::GetInstance().tas_editor_insert_point_held = false;
+	}
+
+	static void handler(int)
+	{
+		handler();
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Editor_Resimulate
+{
+	USAGE("Usage: bxt_tas_editor_resimulate\n Forces simulator client to resimulate.\n");
+
+	static void handler()
+	{
+		auto& hw = HwDLL::GetInstance();
+		auto& frame_bulks = hw.tas_editor_input.frame_bulks;
+
+		if (hw.tas_editor_mode == TASEditorMode::EDIT) {
+			if (frame_bulks.size() > 0) {
+				hw.tas_editor_input.mark_as_stale(0);
+			}
+		}
+	}
+};
+
 struct HwDLL::Cmd_BXT_TAS_Editor_Toggle
 {
 	USAGE("Usage: bxt_tas_editor_toggle <what>\n Toggles a function on the currently selected point. You can toggle:\n"
 	      " - s03 - speed increasing strafing,\n"
 	      " - s13 - quick turn strafing,\n"
 	      " - s22 - slow down strafing,\n"
+	      " - s00 - speed increasing strafing to the left,\n"
+	      " - s01 - speed increasing strafing to the right,\n"
+	      " - s10 - quick turn strafing to the left,\n"
+	      " - s11 - quick turn strafing to the right,\n"
+	      " - s06 - left-right strafing,\n"
+	      " - s07 - right-left strafing,\n"
 	      " - lgagst - makes autojump and ducktap trigger at optimal speed,\n"
 	      " - autojump,\n"
 	      " - ducktap,\n"
@@ -2672,12 +3911,24 @@ struct HwDLL::Cmd_BXT_TAS_Editor_Toggle
 
 	static void handler(const char *what)
 	{
-		if (!strcmp(what, "s03")) {
+		if (!strcmp(what, "s00")) {
+			HwDLL::GetInstance().tas_editor_toggle_s00 = true;
+		} else if (!strcmp(what, "s01")) {
+			HwDLL::GetInstance().tas_editor_toggle_s01 = true;
+		} else if (!strcmp(what, "s03")) {
 			HwDLL::GetInstance().tas_editor_toggle_s03 = true;
+		} else if (!strcmp(what, "s10")) {
+			HwDLL::GetInstance().tas_editor_toggle_s10 = true;
+		} else if (!strcmp(what, "s11")) {
+			HwDLL::GetInstance().tas_editor_toggle_s11 = true;
 		} else if (!strcmp(what, "s13")) {
 			HwDLL::GetInstance().tas_editor_toggle_s13 = true;
 		} else if (!strcmp(what, "s22")) {
 			HwDLL::GetInstance().tas_editor_toggle_s22 = true;
+		} else if (!strcmp(what, "s06")) {
+			HwDLL::GetInstance().tas_editor_toggle_s06 = true;
+		} else if (!strcmp(what, "s07")) {
+			HwDLL::GetInstance().tas_editor_toggle_s07 = true;
 		} else if (!strcmp(what, "lgagst")) {
 			HwDLL::GetInstance().tas_editor_toggle_lgagst = true;
 		} else if (!strcmp(what, "autojump")) {
@@ -2722,6 +3973,80 @@ struct HwDLL::Cmd_BXT_TAS_Editor_Toggle
 	}
 };
 
+struct HwDLL::Cmd_BXT_TAS_Editor_Set_Frametime
+{
+	USAGE("Usage: bxt_tas_editor_set_frametime <frametime>\n Sets frametime on the currently selected point.\n");
+
+	static void handler(const char *value)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		if (std::atof(value) <= 0.f) {
+			hw.ORIG_Con_Printf("Frametime must be greater than 0.\n");
+		} else {
+			hw.tas_editor_set_frametime = true;
+			hw.tas_editor_set_frametime_time = value;
+		}
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Editor_Set_Change_Type
+{
+	USAGE("Usage: bxt_tas_editor_set_change_type <type>\n Set type of change for a point in the camera editor. Valid types are target_yaw, target_yaw_offset, yaw, pitch.\n");
+
+	static void handler(const char *what)
+	{
+		if (!strcmp(what, "target_yaw")) {
+			HwDLL::GetInstance().tas_editor_set_change_to_target_yaw = true;
+		} else if (!strcmp(what, "target_yaw_offset")) {
+			HwDLL::GetInstance().tas_editor_set_change_to_target_yaw_offset = true;
+		} else if (!strcmp(what, "yaw")) {
+			HwDLL::GetInstance().tas_editor_set_change_to_yaw = true;
+		} else if (!strcmp(what, "pitch")) {
+			HwDLL::GetInstance().tas_editor_set_change_to_pitch = true;
+		}
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Editor_Set_Target_Yaw_Type
+{
+	USAGE("Usage: bxt_tas_editor_set_target_yaw_type <type>\n Set type of target_yaw for a point in the camera editor. Valid types (currently supported) are velocity_lock and look_at [entity <index>] [<x> <y> <z>].\n");
+
+	static void handler(const char *what)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		if (!strcmp(what, "velocity_lock")) {
+			hw.tas_editor_set_target_yaw_velocity_lock = true;
+		} else {
+			unsigned int entity;
+			float x = 0, y = 0, z = 0;
+			hw.tas_editor_set_target_yaw_look_at_entity = 0;
+			hw.tas_editor_set_target_yaw_look_at_x = 0;
+			hw.tas_editor_set_target_yaw_look_at_y = 0;
+			hw.tas_editor_set_target_yaw_look_at_z = 0;
+
+			int scan_entity = sscanf(what, "look_at entity %d %f %f %f", &entity, &x, &y, &z);
+			if (scan_entity) {
+				hw.tas_editor_set_target_yaw_look_at = true;
+				hw.tas_editor_set_target_yaw_look_at_entity = entity;
+
+				if (scan_entity == 4) {
+					hw.tas_editor_set_target_yaw_look_at_x = x;
+					hw.tas_editor_set_target_yaw_look_at_y = y;
+					hw.tas_editor_set_target_yaw_look_at_z = z;
+				}
+			} else if (sscanf(what, "look_at %f %f %f", &x, &y, &z) == 3) {
+				hw.tas_editor_set_target_yaw_look_at = true;
+				hw.tas_editor_set_target_yaw_look_at_entity = 0;
+				hw.tas_editor_set_target_yaw_look_at_x = x;
+				hw.tas_editor_set_target_yaw_look_at_y = y;
+				hw.tas_editor_set_target_yaw_look_at_z = z;
+			}
+		}
+	}
+};
+
 struct HwDLL::Cmd_BXT_FreeCam
 {
 	USAGE("Usage: bxt_freecam <0|1>\n Enables the freecam mode. Most useful when paused with bxt_unlock_camera_during_pause 1.\n");
@@ -2732,14 +4057,80 @@ struct HwDLL::Cmd_BXT_FreeCam
 	}
 };
 
+void HwDLL::PrintEntity(std::ostringstream &out, int index)
+{
+	const auto& hw = HwDLL::GetInstance();
+	edict_t* edicts;
+	hw.GetEdicts(&edicts);
+	const edict_t* ent = edicts + index;
+	const char* classname = hw.GetString(ent->v.classname);
+	const char* targetname = hw.GetString(ent->v.targetname);
+	const char* target = hw.GetString(ent->v.target);
+
+	out << index << ": " << classname;
+
+	if (ent->v.targetname != 0) {
+		out << "; name: " << targetname;
+	}
+
+	if (ent->v.target != 0) {
+		out << "; target: " << target;
+	}
+
+	out << "; hp: " << ent->v.health;
+
+	if ((!strncmp(classname, "func_door", 9)) || (!strncmp(classname, "func_rotating", 13)) || (!strncmp(classname, "func_train", 10)))
+		out << "; dmg: " << ent->v.dmg;
+
+	Vector origin;
+	HwDLL::GetInstance().GetOriginOfEntity(origin, ent);
+
+	out << "; xyz: " << origin.x << " " << origin.y << " " << origin.z;
+
+	out << '\n';
+}
+
 struct HwDLL::Cmd_BXT_Print_Entities
 {
 	NO_USAGE();
 
-	static void handler()
+	static void handler(const char *name1, const char *name2)
 	{
 		const auto& hw = HwDLL::GetInstance();
-		const auto& sv = ServerDLL::GetInstance();
+
+		std::ostringstream out;
+
+		bool match_substring = std::strcmp(name2, "*") == 0;
+
+		edict_t *edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+		for (int e = 0; e < numEdicts; ++e) {
+			const edict_t *ent = edicts + e;
+			if (!hw.IsValidEdict(ent))
+				continue;
+
+			const char *classname = hw.GetString(ent->v.classname);
+			if (match_substring)
+			{
+				if ((strstr(classname, name1) == 0))
+					continue;
+			}
+			else
+			{
+				if ((strcmp(classname, name1) != 0) && (strcmp(classname, name2) != 0))
+					continue;
+			}
+
+			HwDLL::GetInstance().PrintEntity(out, e);
+		}
+
+		auto str = out.str();
+		hw.ORIG_Con_Printf("%s", str.c_str());
+	}
+
+	static void handler(const char *name)
+	{
+		const auto& hw = HwDLL::GetInstance();
 
 		std::ostringstream out;
 
@@ -2750,19 +4141,142 @@ struct HwDLL::Cmd_BXT_Print_Entities
 			if (!hw.IsValidEdict(ent))
 				continue;
 
-			const char *classname = sv.GetString(ent->v.classname);
-			out << e << ": " << classname;
+			const char* classname = hw.GetString(ent->v.classname);
+			const char* targetname = hw.GetString(ent->v.targetname);
+			const char* target = hw.GetString(ent->v.target);
+			if ((std::strcmp(classname, name) != 0) && (std::strcmp(targetname, name) != 0) && (std::strcmp(target, name) != 0))
+				continue;
 
-			if (ent->v.targetname != 0) {
-				const char *targetname = sv.GetString(ent->v.targetname);
-				out << " - " << targetname;
-			}
-
-			out << '\n';
+			HwDLL::GetInstance().PrintEntity(out, e);
 		}
 
 		auto str = out.str();
 		hw.ORIG_Con_Printf("%s", str.c_str());
+	}
+
+	static void handler()
+	{
+		const auto& hw = HwDLL::GetInstance();
+
+		std::ostringstream out;
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+		for (int e = 0; e < numEdicts; ++e) {
+			const edict_t* ent = edicts + e;
+			if (!hw.IsValidEdict(ent))
+				continue;
+
+			HwDLL::GetInstance().PrintEntity(out, e);
+		}
+
+		auto str = out.str();
+		hw.ORIG_Con_Printf("%s", str.c_str());
+	}
+};
+
+struct HwDLL::Cmd_BXT_Print_Entities_By_Index
+{
+	USAGE("Usage:\n bxt_print_entities_by_index <index>\n bxt_print_entities_by_index <min_range> <max_range>\n");
+
+	static void handler(int num)
+	{
+		const auto& hw = HwDLL::GetInstance();
+
+		std::ostringstream out;
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+
+		if (num >= numEdicts)
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d does not exist; there are %d entities in total\n", num, numEdicts);
+			return;
+		}
+
+		const edict_t *ent = edicts + num;
+		if (!hw.IsValidEdict(ent))
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d is not valid\n", num);
+			return;
+		}
+
+		HwDLL::GetInstance().PrintEntity(out, num);
+
+		auto str = out.str();
+		hw.ORIG_Con_Printf("%s", str.c_str());
+	}
+
+	static void handler(int value1, int value2)
+	{
+		const auto& hw = HwDLL::GetInstance();
+
+		std::ostringstream out;
+
+		edict_t* edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+		for (int e = 0; e < numEdicts; ++e) {
+			const edict_t* ent = edicts + e;
+			if (!hw.IsValidEdict(ent))
+				continue;
+
+			if ((e < value1) || (e > value2))
+				continue;
+
+			HwDLL::GetInstance().PrintEntity(out, e);
+		}
+
+		auto str = out.str();
+		hw.ORIG_Con_Printf("%s", str.c_str());
+	}
+};
+
+void HwDLL::GetOriginOfEntity(Vector& origin, const edict_t* ent)
+{
+	const auto& hw = HwDLL::GetInstance();
+	const char* classname = hw.GetString(ent->v.classname);
+	bool is_trigger = std::strncmp(classname, "trigger_", 8) == 0;
+	bool is_ladder = std::strncmp(classname, "func_ladder", 11) == 0;
+	bool is_friction = std::strncmp(classname, "func_friction", 13) == 0;
+	bool is_water = std::strncmp(classname, "func_water", 10) == 0;
+
+	// Credits to 'goldsrc_monitor' tool for their code to get origin of entities
+	if (ent->v.solid == SOLID_BSP || ent->v.movetype == MOVETYPE_PUSHSTEP || is_trigger || is_ladder || is_friction || is_water)
+		origin = ent->v.origin + ((ent->v.mins + ent->v.maxs) / 2.f);
+	else
+		origin = ent->v.origin;
+}
+
+struct HwDLL::Cmd_BXT_CH_Teleport_To_Entity
+{
+	USAGE("Usage: bxt_ch_teleport_to_entity <index>\n");
+
+	static void handler(int num)
+	{
+		const auto& hw = HwDLL::GetInstance();
+
+		edict_t *edicts;
+		const int numEdicts = hw.GetEdicts(&edicts);
+
+		if (num >= numEdicts)
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d does not exist; there are %d entities in total\n", num, numEdicts);
+			return;
+		}
+
+		const edict_t *ent = edicts + num;
+		if (!hw.IsValidEdict(ent))
+		{
+			hw.ORIG_Con_Printf("Error: entity with index %d is not valid\n", num);
+			return;
+		}
+
+		Vector origin;
+		HwDLL::GetInstance().GetOriginOfEntity(origin, ent);
+
+		(*hw.sv_player)->v.origin[0] = origin[0];
+		(*hw.sv_player)->v.origin[1] = origin[1];
+		(*hw.sv_player)->v.origin[2] = origin[2];
 	}
 };
 
@@ -2831,6 +4345,18 @@ struct HwDLL::Cmd_BXT_TAS_Editor_Set_Commands
 	}
 };
 
+struct HwDLL::Cmd_BXT_TAS_Editor_Set_Left_Right_Count
+{
+	USAGE("Usage: bxt_tas_editor_set_left_right_count <count>\n Sets the left-right or right-left frame count on the currently selected point.\n");
+
+	static void handler(unsigned long value)
+	{
+		auto& hw = HwDLL::GetInstance();
+		hw.tas_editor_set_left_right_count = true;
+		hw.tas_editor_set_left_right_count_count = value;
+	}
+};
+
 struct HwDLL::Cmd_BXT_TAS_Editor_Unset_Yaw
 {
 	USAGE("Usage: bxt_tas_editor_unset_yaw <yaw>\n Unsets the yaw angle on the currently selected point.\n");
@@ -2853,12 +4379,567 @@ struct HwDLL::Cmd_BXT_TAS_Editor_Unset_Pitch
 	}
 };
 
+struct HwDLL::Cmd_BXT_TAS_Editor_Apply_Smoothing
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		auto& hw = HwDLL::GetInstance();
+		hw.tas_editor_apply_smoothing = true;
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Optim_Init
+{
+	NO_USAGE();
+
+	static void handler()
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		std::ostringstream oss;
+		oss << "_bxt_tas_optim_init \"" << hw.hltas_filename << "\" " << hw.movementFrameCounter - 1 << ";";
+		hw.ORIG_Cbuf_InsertText(oss.str().c_str());
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Become_Simulator_Client
+{
+	NO_USAGE()
+
+	static void handler()
+	{
+		auto err = simulation_ipc::initialize_client();
+		if (!err.empty())
+			HwDLL::GetInstance().ORIG_Con_Printf("Couldn't become simulator client: %s\n", err.c_str());
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Server_Send_Command
+{
+	USAGE("Usage: _bxt_tas_server_send_command <command>\n Sends a console command to the client.\n");
+
+	static void handler(const char *command)
+	{
+		if (simulation_ipc::write_command(std::string(command) + '\n'))
+			simulation_ipc::send_message_to_client();
+	}
+};
+
+struct HwDLL::Cmd_BXT_TAS_Client_Load_Received_Script
+{
+	NO_USAGE()
+
+	static void handler() {
+		if (!simulation_ipc::is_client_initialized())
+			return;
+
+		if (simulation_ipc::message.script[0] == 0)
+			return;
+
+		auto& hw = HwDLL::GetInstance();
+		hw.ResetStateBeforeTASPlayback();
+
+		auto err = hw.input.FromString(simulation_ipc::message.script);
+		simulation_ipc::message.script[0] = 0;
+
+		if (err.Code != HLTAS::ErrorCode::OK) {
+			const auto& message = hw.input.GetErrorMessage();
+			if (message.empty()) {
+				hw.ORIG_Con_Printf("Error loading the script file on line %u: %s\n", err.LineNumber, HLTAS::GetErrorMessage(err).c_str());
+			} else {
+				hw.ORIG_Con_Printf("Error loading the script: %s\n", message.c_str());
+			}
+			return;
+		}
+
+		hw.StartTASPlayback();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Show_Bullets_Clear
+{
+	NO_USAGE()
+
+	static void handler() {
+		auto& serverDLL = ServerDLL::GetInstance();
+
+		serverDLL.ClearBulletsTrace();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Show_Bullets_Enemy_Clear
+{
+	NO_USAGE()
+
+	static void handler() {
+		auto& serverDLL = ServerDLL::GetInstance();
+
+		serverDLL.ClearBulletsEnemyTrace();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Split
+{
+	USAGE("Usage: bxt_split <name>\n Tells BunnySplit to split by the specified map name, and prints to console the current time. Mostly intended to be used in scripts, or in custom triggers (these may not be valid in runs, check the rules for your game/category).\n");
+
+	// TODO: it should be possible to split without a map/split name, like when you right-click on LiveSplit and click on Split,
+	// but I don't think BunnySplit supports this
+
+	static void handler(const char* name)
+	{
+		Vector speed;
+		Vector origin;
+		const auto& player = HwDLL::GetInstance().GetPlayerEdict();
+		if (player)
+		{
+			speed = player->v.velocity;
+			origin = player->v.origin;
+		}
+		const auto& time = CustomHud::GetTime();
+
+		Splits::Split fake_split;
+		fake_split.name = std::move(name);
+		fake_split.time = time;
+		fake_split.speed = speed;
+		fake_split.origin = origin;
+
+		Splits::PrintSplitCompletion(fake_split);
+		Interprocess::WriteMapChange(time, name);
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Add_Entity
+{
+	USAGE("Usage: bxt_splits_add_entity <target_name> [map_name]\n Tells BunnySplit to split when activating an entity by the specified name, and prints to console the current time.\n");
+
+	static void handler(const char* targetname)
+	{
+		Splits::splits.emplace_back(std::string(targetname));
+	}
+
+	static void handler(const char* targetname, const char* map_name)
+	{
+		Splits::splits.emplace_back(std::string(targetname), std::string(map_name));
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Add_Trigger
+{
+	USAGE("Usage: bxt_splits_add_trigger <x1> <y1> <z1> <x2> <y2> <z2> [map_name] [name]\n Adds a split trigger in a form of axis-aligned cuboid with opposite corners at coordinates (x1, y1, z1) and (x2, y2, z2).\n");
+
+	static void handler(float x1, float y1, float z1, float x2, float y2, float z2)
+	{
+		Splits::splits.emplace_back(Vector(x1, y1, z1), Vector(x2, y2, z2));
+	}
+
+	static void handler(float x1, float y1, float z1, float x2, float y2, float z2, const char* map_name)
+	{
+		Splits::splits.emplace_back(Vector(x1, y1, z1), Vector(x2, y2, z2), std::string(map_name));
+	}
+
+	static void handler(float x1, float y1, float z1, float x2, float y2, float z2, const char* map_name, const char* split_name)
+	{
+		Splits::splits.emplace_back(Vector(x1, y1, z1), Vector(x2, y2, z2), std::string(map_name), std::string(split_name));
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Clear
+{
+	NO_USAGE()
+
+	static void handler()
+	{
+		Splits::splits.clear();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Delete
+{
+	USAGE("Usage: bxt_splits_delete [id]\n Deletes the last placed split.\n If an id is given, deletes the split with the given id.\n");
+
+	static void handler()
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.erase(--Splits::splits.end());
+	}
+
+	static void handler(const char* id_or_name)
+	{
+		// First try to find it by name, otherwise we'll try to find by id
+		const auto itr = std::find_if(Splits::splits.begin(), Splits::splits.end(),
+			[&id_or_name](const Splits::Split& s) { return !strcmp(id_or_name, s.name.c_str()); });
+
+		unsigned long idx = 0;
+		if (itr == Splits::splits.end())
+			idx = std::strtoul(id_or_name, nullptr, 10);
+		else
+			idx = itr - Splits::splits.begin() + 1;
+
+		if (idx == 0 || Splits::splits.size() < idx) {
+			HwDLL::GetInstance().ORIG_Con_Printf("There's no split with this name or id.\n");
+			return;
+		}
+
+		Splits::splits.erase(Splits::splits.begin() + (idx - 1));
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Export
+{
+	USAGE("Usage: bxt_splits_export [cmd|script]\n");
+
+	static void handler(const char* type)
+	{
+		auto& hw = HwDLL::GetInstance();
+
+		enum class ExportType {
+			CMD,
+			SCRIPT
+		} export_type;
+
+		if (!std::strcmp(type, "cmd")) {
+			export_type = ExportType::CMD;
+		} else if (!std::strcmp(type, "script")) {
+			export_type = ExportType::SCRIPT;
+		} else {
+			hw.ORIG_Con_Printf("%s", GET_USAGE());
+			return;
+		}
+
+		auto command_separator = (export_type == ExportType::SCRIPT) ? '\n' : ';';
+
+		if (Splits::splits.empty()) {
+			hw.ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		bool first = true;
+		for (const auto& split : Splits::splits) {
+			auto corners = split.get_corner_positions();
+
+			std::ostringstream oss;
+
+			if (!first)
+				oss << command_separator;
+
+			if (split.targets_entity) {
+				oss << "bxt_splits_add_entity " << split.name << " " << split.map_name;
+			} else {
+				oss << "bxt_splits_add_trigger " << std::fixed << std::setprecision(1)
+					<< corners.first.x << " " << corners.first.y << " " << corners.first.z << " "
+					<< corners.second.x << " " << corners.second.y << " " << corners.second.z;
+
+				if (!split.map_name.empty())
+					oss << command_separator << "bxt_splits_set_map \"" << split.map_name << '\"';
+
+				if (!split.name.empty())
+					oss << command_separator << "bxt_splits_set_name \"" << split.name << '\"';
+			}
+
+			// Note that by default a split always tracks horizontal speed. If this behaviour changes,
+			// we have to change this part too. If we always print the command regardless of the value,
+			// then the output command/script will be huge
+			if (!split.track_horizontal_speed)
+				oss << command_separator << "bxt_splits_track_horizontal_speed 0";
+
+			if (split.track_vertical_speed)
+				oss << command_separator << "bxt_splits_track_vertical_speed 1";
+
+			if (split.track_x)
+				oss << command_separator << "bxt_splits_track_x 1";
+
+			if (split.track_y)
+				oss << command_separator << "bxt_splits_track_y 1";
+
+			if (split.track_z)
+				oss << command_separator << "bxt_splits_track_z 1";
+
+			hw.ORIG_Con_Printf(oss.str().c_str());
+
+			first = false;
+		}
+
+		hw.ORIG_Con_Printf("\n");
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_List
+{
+	USAGE("Usage: bxt_splits_list [map_name]. You can specify a map name to list splits that are limited to that map.\n");
+
+	static void handler()
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+		Splits::PrintList(Splits::splits);
+	}
+
+	static void handler(const char* map_name)
+	{
+		std::vector<Splits::Split> map_splits;
+		std::copy_if(Splits::splits.begin(), Splits::splits.end(), std::back_inserter(map_splits),
+			[&map_name](Splits::Split &s){ return !strcmp(map_name, s.map_name.c_str()); } );
+
+		if (map_splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("There are no splits in the specified map.\n");
+			return;
+		}
+		Splits::PrintList(map_splits);
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Print_Times
+{
+	NO_USAGE()
+
+	static void handler()
+	{
+		Splits::PrintAll();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Set_Map
+{
+	USAGE("Usage: bxt_splits_set_map <name>\n Sets the last placed split's map (scope).\n bxt_splits_set_map <id> <name>\n Sets the map of a split with the given id.\n");
+
+	static void handler(const char* newMap)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().map_name = std::move(newMap);
+	}
+
+	static void handler(const char* idOrName, const char* newMap)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->map_name = std::move(newMap);
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Set_Name
+{
+	USAGE("Usage: bxt_splits_set_name <name>\n Sets the last placed split's name.\n bxt_splits_set_name <id> <name>\n Sets the name of a split with the given id.\n");
+
+	static void handler(const char* newName)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().name = std::move(newName);
+	}
+
+	static void handler(const char* idOrName, const char* newName)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->name = std::move(newName);
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Track_Horizontal_Speed
+{
+	USAGE("Usage: bxt_splits_track_horizontal_speed <0|1>\n Makes the last placed split account for the horizontal components of velocity when printing the speed.\n bxt_splits_track_horizontal_speed <split name or id> <0|1>\n Same but you can specify the split name or id instead.\n");
+
+	static void handler(int value)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().track_horizontal_speed = value;
+	}
+
+	static void handler(const char* idOrName, int value)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->track_horizontal_speed = value;
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Track_Vertical_Speed
+{
+	USAGE("Usage: bxt_splits_track_vertical_speed <0|1>\n Makes the last placed split account for the vertical component of velocity when printing the speed.\n bxt_splits_track_vertical_speed <split name or id> <0|1>\n Same but you can specify the split name or id instead.\n");
+
+	static void handler(int value)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().track_vertical_speed = value;
+	}
+
+	static void handler(const char* idOrName, int value)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->track_vertical_speed = value;
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Track_X
+{
+	USAGE("Usage: bxt_splits_track_x <0|1>\n Makes the last placed split account for the X component when printing your position.\n bxt_splits_track_x <split name or id> <0|1>\n Same but you can specify the split name or id instead.\n");
+
+	static void handler(int value)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().track_x = value;
+	}
+
+	static void handler(const char* idOrName, int value)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->track_x = value;
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Track_Y
+{
+	USAGE("Usage: bxt_splits_track_y <0|1>\n Makes the last placed split account for the Y component when printing your position.\n bxt_splits_track_y <split name or id> <0|1>\n Same but you can specify the split name or id instead.\n");
+
+	static void handler(int value)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().track_y = value;
+	}
+
+	static void handler(const char* idOrName, int value)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->track_y = value;
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Track_Z
+{
+	USAGE("Usage: bxt_splits_track_z <0|1>\n Makes the last placed split account for the Z component when printing your position.\n bxt_splits_track_z <split name or id> <0|1>\n Same but you can specify the split name or id instead.\n");
+
+	static void handler(int value)
+	{
+		if (Splits::splits.empty()) {
+			HwDLL::GetInstance().ORIG_Con_Printf("You haven't placed any splits.\n");
+			return;
+		}
+
+		Splits::splits.back().track_z = value;
+	}
+
+	static void handler(const char* idOrName, int value)
+	{
+		auto split = Splits::GetSplitByNameOrId(idOrName);
+		if (split)
+			split->track_z = value;
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Place_Up
+{
+	NO_USAGE()
+
+	static void handler()
+	{
+		Splits::placing = false;
+	}
+
+	static void handler(const char *)
+	{
+		handler();
+	}
+};
+
+struct HwDLL::Cmd_BXT_Splits_Place_Down
+{
+	NO_USAGE()
+
+	static void handler()
+	{
+		auto trace = HwDLL::GetInstance().CameraTrace();
+
+		Splits::placing = true;
+		Vector start = trace.EndPos;
+		Splits::place_start = start;
+		Splits::splits.emplace_back(start, start, HwDLL::GetInstance().lastLoadedMap);
+	}
+
+	static void handler(const char*)
+	{
+		handler();
+	}
+};
+
+extern "C" DLLEXPORT void bxt_tas_load_script_from_string(const char *script)
+{
+	auto& hw = HwDLL::GetInstance();
+	hw.ResetStateBeforeTASPlayback();
+
+	auto err = hw.input.FromString(script);
+
+	if (err.Code != HLTAS::ErrorCode::OK) {
+		const auto& message = hw.input.GetErrorMessage();
+		if (message.empty()) {
+			hw.ORIG_Con_Printf("Error loading the script file on line %u: %s\n", err.LineNumber, HLTAS::GetErrorMessage(err).c_str());
+		} else {
+			hw.ORIG_Con_Printf("Error loading the script: %s\n", message.c_str());
+		}
+		return;
+	}
+
+	hw.StartTASPlayback();
+}
+
 void HwDLL::SetTASEditorMode(TASEditorMode mode)
 {
 	auto& cl = ClientDLL::GetInstance();
 
-	if (mode != TASEditorMode::DISABLED)
+	// Don't enable unless we're in-game, otherwise the game can crash.
+	int *state = reinterpret_cast<int*>(cls);
+	if (state && *state != 5 && mode != TASEditorMode::DISABLED) {
+		ORIG_Con_Printf("You must be in-game to enable the TAS editor.\n");
+		return;
+	}
+
+	if (tas_editor_mode != TASEditorMode::DISABLED && mode == TASEditorMode::DISABLED) {
+		// Save the script into a backup file in case the editor was disabled by accident.
+		auto err = tas_editor_input.save(hltas_filename + ".backup");
+		if (err.Code != HLTAS::ErrorCode::OK)
+			ORIG_Con_Printf("Error saving a backup script: %s\n", HLTAS::GetErrorMessage(err).c_str());
+	}
+
+	if (mode != TASEditorMode::DISABLED) {
 		SetFreeCam(true);
+
+		auto err = simulation_ipc::initialize_server_if_needed();
+		if (!err.empty() && ORIG_Con_Printf)
+			ORIG_Con_Printf("Couldn't initialize simulator server: %s\n", err.c_str());
+	}
 
 	if (tas_editor_mode == TASEditorMode::DISABLED && mode != TASEditorMode::DISABLED) {
 		tas_editor_input = EditedInput();
@@ -2866,6 +4947,13 @@ void HwDLL::SetTASEditorMode(TASEditorMode mode)
 
 		// If invoked while running a script, put all frame bulks up until the last one for editing.
 		if (runningFrames) {
+			if (currentRepeat == 0) {
+				// The TAS editor was enabled on a 1-long frame bulk, and the execution
+				// has already jumped to the next one. So, move the frame bulk back by one.
+				if (currentFramebulk > 0) // Sanity check.
+					currentFramebulk--;
+			}
+
 			auto limit = input.GetFrames().size() - 1;
 			for (size_t i = currentFramebulk; i < limit; ++i) {
 				tas_editor_input.frame_bulks.push_back(input.GetFrames()[currentFramebulk]);
@@ -2874,6 +4962,11 @@ void HwDLL::SetTASEditorMode(TASEditorMode mode)
 
 			runningFrames = false;
 			ORIG_Cbuf_InsertText("host_framerate 0;_bxt_norefresh 0;_bxt_min_frametime 0;bxt_taslog 0\n");
+
+			assert(movementFrameCounter >= 1);
+			tas_editor_input.first_frame_counter_value = movementFrameCounter - 1;
+
+			tas_editor_input.run_script_in_second_game();
 		} else {
 			// If invoked outside of a script, make sure the hlstrafe version is latest.
 			hlstrafe_version = HLStrafe::MAX_SUPPORTED_VERSION;
@@ -2883,42 +4976,9 @@ void HwDLL::SetTASEditorMode(TASEditorMode mode)
 	if (mode == TASEditorMode::EDIT) {
 		cl.SetMouseState(false);
 		SDL::GetInstance().SetRelativeMouseMode(false);
-
-		if (tas_editor_mode == TASEditorMode::APPEND) {
-			tas_editor_input.mark_as_stale(tas_editor_input.frame_bulks.size() - 1);
-			tas_editor_input.frame_bulks.erase(tas_editor_input.frame_bulks.end() - 1);
-		}
 	} else {
 		cl.SetMouseState(true);
 		SDL::GetInstance().SetRelativeMouseMode(true);
-	}
-
-	if (tas_editor_mode != TASEditorMode::APPEND && mode == TASEditorMode::APPEND) {
-		auto frame_bulk = HLTAS::Frame();
-		auto frame_count = input.GetFrames().size();
-		if (frame_count > 0) {
-			// Copy the last frame.
-			frame_bulk = input.GetFrames()[frame_count - 1];
-			frame_bulk.Comments.clear();
-			frame_bulk.Commands.clear();
-
-			// Make sure the strafe direction is Yaw.
-			frame_bulk.SetDir(HLTAS::StrafeDir::YAW);
-		} else {
-			// If there's no input just make a s03lj frame bulk.
-			frame_bulk.Strafe = true;
-			frame_bulk.SetDir(HLTAS::StrafeDir::YAW);
-			frame_bulk.SetType(HLTAS::StrafeType::MAXACCEL);
-			frame_bulk.Lgagst = true;
-			frame_bulk.Autojump = true;
-
-			std::ostringstream oss;
-			oss << GetFrameTime();
-			frame_bulk.Frametime = oss.str();
-		}
-
-		frame_bulk.SetRepeats(1);
-		tas_editor_input.frame_bulks.push_back(frame_bulk);
 	}
 
 	tas_editor_mode = mode;
@@ -2953,13 +5013,12 @@ void HwDLL::SaveEditedInput()
 	if (tas_editor_mode == TASEditorMode::DISABLED)
 		return;
 
-	if (tas_editor_mode == TASEditorMode::APPEND) {
-		// Append mode always has the last frame bulk that we're currently editing.
-		// We don't want it to be saved.
-		tas_editor_input.frame_bulks.erase(tas_editor_input.frame_bulks.end() - 1);
-	}
+	auto err = tas_editor_input.save(hltas_filename);
+	if (err.Code == HLTAS::ErrorCode::OK)
+		ORIG_Con_Printf("Saved the script: %s\n", hltas_filename.c_str());
+	else
+		ORIG_Con_Printf("Error saving the script: %s\n", HLTAS::GetErrorMessage(err).c_str());
 
-	tas_editor_input.save();
 	SetTASEditorMode(TASEditorMode::DISABLED);
 }
 
@@ -2997,17 +5056,25 @@ void HwDLL::RegisterCVarsAndCommandsIfNeeded()
 	registeredVarsAndCmds = true;
 	RegisterCVar(CVars::_bxt_taslog);
 	RegisterCVar(CVars::_bxt_min_frametime);
+	RegisterCVar(CVars::_bxt_tas_script_generation);
 	RegisterCVar(CVars::bxt_taslog_filename);
 	RegisterCVar(CVars::bxt_autopause);
 	RegisterCVar(CVars::bxt_bhopcap);
 	RegisterCVar(CVars::bxt_interprocess_enable);
 	RegisterCVar(CVars::bxt_fade_remove);
+	RegisterCVar(CVars::bxt_shake_remove);
 	RegisterCVar(CVars::bxt_skybox_remove);
+	RegisterCVar(CVars::bxt_water_remove);
 	RegisterCVar(CVars::bxt_stop_demo_on_changelevel);
 	RegisterCVar(CVars::bxt_tas_editor_simulate_for_ms);
+	RegisterCVar(CVars::bxt_tas_editor_camera_editor);
 	RegisterCVar(CVars::bxt_tas_norefresh_until_last_frames);
 	RegisterCVar(CVars::bxt_tas_write_log);
 	RegisterCVar(CVars::bxt_tas_playback_speed);
+	RegisterCVar(CVars::bxt_tas_editor_apply_smoothing_over_s);
+	RegisterCVar(CVars::_bxt_tas_editor_apply_smoothing_high_weight_duration);
+	RegisterCVar(CVars::_bxt_tas_editor_apply_smoothing_high_weight_multiplier);
+	RegisterCVar(CVars::bxt_tas_editor_show_only_last_frames);
 	RegisterCVar(CVars::bxt_disable_vgui);
 	RegisterCVar(CVars::bxt_wallhack);
 	RegisterCVar(CVars::bxt_wallhack_additive);
@@ -3022,14 +5089,34 @@ void HwDLL::RegisterCVarsAndCommandsIfNeeded()
 	RegisterCVar(CVars::bxt_collision_depth_map_max_depth);
 	RegisterCVar(CVars::bxt_collision_depth_map_pixel_scale);
 	RegisterCVar(CVars::bxt_collision_depth_map_remove_distance_limit);
+	RegisterCVar(CVars::bxt_collision_depth_map_fov);
 	RegisterCVar(CVars::bxt_force_zmax);
+	RegisterCVar(CVars::bxt_viewmodel_disable_idle);
+	RegisterCVar(CVars::bxt_viewmodel_disable_equip);
+	RegisterCVar(CVars::bxt_viewmodel_semitransparent);
+	RegisterCVar(CVars::bxt_clear_color);
+	RegisterCVar(CVars::bxt_fix_mouse_horizontal_limit);
+	RegisterCVar(CVars::bxt_force_clear);
+	RegisterCVar(CVars::bxt_disable_gamedir_check_in_demo);
+	RegisterCVar(CVars::bxt_remove_fps_limit);
+	RegisterCVar(CVars::bxt_disable_world);
+	RegisterCVar(CVars::bxt_disable_particles);
+	RegisterCVar(CVars::bxt_tas_ducktap_priority);
+
+	if (ORIG_R_SetFrustum && scr_fov_value)
+		RegisterCVar(CVars::bxt_force_fov);
 
 	if (ORIG_R_DrawViewModel)
 		RegisterCVar(CVars::bxt_viewmodel_fov);
 
+	if (ORIG_R_DrawViewModel && ORIG_R_PreDrawViewModel)
+		RegisterCVar(CVars::bxt_remove_viewmodel);
+
 	CVars::sv_cheats.Assign(FindCVar("sv_cheats"));
 	CVars::fps_max.Assign(FindCVar("fps_max"));
 	CVars::default_fov.Assign(FindCVar("default_fov"));
+	CVars::skill.Assign(FindCVar("skill"));
+	CVars::host_framerate.Assign(FindCVar("host_framerate"));
 
 	FindCVarsIfNeeded();
 
@@ -3039,24 +5126,37 @@ void HwDLL::RegisterCVarsAndCommandsIfNeeded()
 	using CmdWrapper::Handler;
 	typedef CmdWrapper::CmdWrapper<CmdFuncs> wrapper;
 
+	if (is_cof_steam)
+	{
+		CmdFuncs::AddCommand("noclip", ORIG_Host_Noclip_f);
+		CmdFuncs::AddCommand("notarget", ORIG_Host_Notarget_f);
+	}
+
 	wrapper::Add<Cmd_BXT_TAS_LoadScript, Handler<const char *>>("bxt_tas_loadscript");
 	wrapper::Add<Cmd_BXT_TAS_ExportScript, Handler<const char *>>("bxt_tas_exportscript");
 	wrapper::Add<Cmd_BXT_TAS_ExportLibTASInput, Handler<const char *>>("bxt_tas_export_libtas_input");
 	wrapper::Add<Cmd_BXT_TAS_Split, Handler<const char *>>("bxt_tas_split");
 	wrapper::Add<Cmd_BXT_TAS_New, Handler<const char *, const char *, int>>("bxt_tas_new");
+	wrapper::Add<Cmd_BXT_TAS_Check_Position, Handler<float, float, float>>("_bxt_tas_check_position");
 	wrapper::AddCheat<Cmd_BXT_CH_Set_Health, Handler<float>>("bxt_ch_set_health");
 	wrapper::AddCheat<Cmd_BXT_CH_Set_Armor, Handler<float>>("bxt_ch_set_armor");
 	wrapper::AddCheat<Cmd_BXT_CH_Set_Origin, Handler<float, float, float>>("bxt_ch_set_pos");
 	wrapper::AddCheat<Cmd_BXT_CH_Set_Origin_Offset, Handler<float, float, float>>("bxt_ch_set_pos_offset");
 	wrapper::AddCheat<Cmd_BXT_CH_Set_Velocity, Handler<float, float, float>>("bxt_ch_set_vel");
+	wrapper::AddCheat<Cmd_BXT_CH_Teleport_To_Entity, Handler<int>>("bxt_ch_teleport_to_entity");
+	wrapper::AddCheat<Cmd_BXT_CH_Get_Velocity, Handler<>>("bxt_ch_get_vel");
+	wrapper::AddCheat<Cmd_BXT_CH_Get_Other_Player_Info, Handler<>>("bxt_ch_get_other_player_info");
+	wrapper::AddCheat<Cmd_BXT_CH_Entity_Set_Health, Handler<float>, Handler<float, int>>("bxt_ch_entity_set_health");
+	wrapper::AddCheat<Cmd_BXT_CH_Monster_Set_Origin, Handler<int>, Handler<int, float>, Handler<float, float, float>, Handler<float, float, float, int>>("bxt_ch_monster_set_origin");
 	wrapper::AddCheat<
 		Cmd_BXT_CH_Set_Velocity_Angles,
 		Handler<float>,
 		Handler<float, float, float>>("bxt_ch_set_vel_angles");
-	wrapper::AddCheat<
-		Cmd_BXT_CH_Set_Angles,
+	wrapper::Add<
+		Cmd_BXT_Set_Angles,
 		Handler<float, float>,
-		Handler<float, float, float>>("bxt_ch_set_angles");
+		Handler<float, float, float>>("bxt_set_angles");
+	wrapper::Add<Cmd_BXT_Get_Server_Time, Handler<>>("bxt_get_server_time");
 	wrapper::Add<
 		Cmd_Multiwait,
 		Handler<>,
@@ -3067,6 +5167,7 @@ void HwDLL::RegisterCVarsAndCommandsIfNeeded()
 	wrapper::Add<Cmd_BXT_Timer_Start, Handler<>>("bxt_timer_start");
 	wrapper::Add<Cmd_BXT_Timer_Stop, Handler<>>("bxt_timer_stop");
 	wrapper::Add<Cmd_BXT_Timer_Reset, Handler<>>("bxt_timer_reset");
+	wrapper::Add<Cmd_BXT_Get_Origin_And_Angles, Handler<>>("bxt_get_pos");
 	wrapper::Add<Cmd_BXT_TAS_Autojump_Down, Handler<>, Handler<const char*>>("+bxt_tas_autojump");
 	wrapper::Add<Cmd_BXT_TAS_Autojump_Up, Handler<>, Handler<const char*>>("-bxt_tas_autojump");
 	wrapper::Add<Cmd_BXT_TAS_Ducktap_Down, Handler<>, Handler<const char*>>("+bxt_tas_ducktap");
@@ -3090,29 +5191,67 @@ void HwDLL::RegisterCVarsAndCommandsIfNeeded()
 	wrapper::Add<Cmd_BXT_Load, Handler<const char *>>("_bxt_load");
 	wrapper::Add<Cmd_BXT_Interprocess_Reset, Handler<>>("_bxt_interprocess_reset");
 	wrapper::Add<Cmd_BXT_Interprocess_Stop, Handler<>>("_bxt_interprocess_stop");
+	wrapper::Add<Cmd_BXT_Set_Frametime_Remainder, Handler<double>>("_bxt_set_frametime_remainder");
 	wrapper::Add<Cmd_BXT_Reset_Frametime_Remainder, Handler<>>("_bxt_reset_frametime_remainder");
 	wrapper::Add<Cmd_BXT_TASLog, Handler<int>>("bxt_taslog");
 	wrapper::Add<Cmd_BXT_Append, Handler<const char *>>("bxt_append");
 	wrapper::Add<Cmd_BXT_FreeCam, Handler<int>>("bxt_freecam");
-	wrapper::Add<Cmd_BXT_Print_Entities, Handler<>>("bxt_print_entities");
+	wrapper::Add<Cmd_BXT_Print_Entities, Handler<>, Handler<const char*>, Handler<const char*, const char*>>("bxt_print_entities");
+	wrapper::Add<Cmd_BXT_Print_Entities_By_Index, Handler<int>, Handler<int, int>>("bxt_print_entities_by_index");
 
+	wrapper::Add<Cmd_BXT_TAS_Editor_Resimulate, Handler<>>("bxt_tas_editor_resimulate");
+	wrapper::Add<Cmd_BXT_TAS_Editor_Apply_Smoothing, Handler<>>("bxt_tas_editor_apply_smoothing");
+	wrapper::Add<Cmd_BXT_TAS_Optim_Init, Handler<>>("bxt_tas_optim_init");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Unset_Pitch, Handler<>>("bxt_tas_editor_unset_pitch");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Unset_Yaw, Handler<>>("bxt_tas_editor_unset_yaw");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Commands, Handler<const char*>>("bxt_tas_editor_set_commands");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Repeats, Handler<int>>("bxt_tas_editor_set_repeats");
+	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Frametime, Handler<const char*>>("bxt_tas_editor_set_frametime");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Pitch, Handler<float>>("bxt_tas_editor_set_pitch");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Yaw, Handler<float>>("bxt_tas_editor_set_yaw");
+	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Left_Right_Count, Handler<unsigned long>>("bxt_tas_editor_set_left_right_count");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Toggle, Handler<const char*>>("bxt_tas_editor_toggle");
+	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Change_Type, Handler<const char*>>("bxt_tas_editor_set_change_type");
+	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Target_Yaw_Type, Handler<const char*>>("bxt_tas_editor_set_target_yaw_type");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Set_Run_Point_And_Save, Handler<>>("bxt_tas_editor_set_run_point_and_save");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Delete_Last_Point, Handler<>>("bxt_tas_editor_delete_last_point");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Delete_Point, Handler<>>("bxt_tas_editor_delete_point");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Insert_Point, Handler<>>("bxt_tas_editor_insert_point");
+	wrapper::Add<Cmd_Plus_BXT_TAS_Editor_Insert_Point, Handler<>, Handler<int>>("+bxt_tas_editor_insert_point");
+	wrapper::Add<Cmd_Minus_BXT_TAS_Editor_Insert_Point, Handler<>, Handler<int>>("-bxt_tas_editor_insert_point");
 	wrapper::Add<Cmd_BXT_TAS_Editor_Save, Handler<>>("bxt_tas_editor_save");
-	wrapper::Add<Cmd_Plus_BXT_TAS_Editor_Append, Handler<>, Handler<int>>("+bxt_tas_editor_append");
-	wrapper::Add<Cmd_Minus_BXT_TAS_Editor_Append, Handler<>, Handler<int>>("-bxt_tas_editor_append");
 	wrapper::Add<Cmd_Plus_BXT_TAS_Editor_Look_Around, Handler<>, Handler<int>>("+bxt_tas_editor_look_around");
 	wrapper::Add<Cmd_Minus_BXT_TAS_Editor_Look_Around, Handler<>, Handler<int>>("-bxt_tas_editor_look_around");
 	wrapper::Add<Cmd_BXT_TAS_Editor, Handler<int>>("bxt_tas_editor");
+
+	wrapper::Add<Cmd_BXT_TAS_Become_Simulator_Client, Handler<>>("bxt_tas_become_simulator_client");
+	wrapper::Add<Cmd_BXT_TAS_Server_Send_Command, Handler<const char*>>("_bxt_tas_server_send_command");
+	wrapper::Add<Cmd_BXT_TAS_Client_Load_Received_Script, Handler<>>("_bxt_tas_client_load_received_script");
+
+	wrapper::Add<Cmd_BXT_Show_Bullets_Clear, Handler<>>("bxt_show_bullets_clear");
+	wrapper::Add<Cmd_BXT_Show_Bullets_Enemy_Clear, Handler<>>("bxt_show_bullets_enemy_clear");
+
+	wrapper::Add<Cmd_BXT_Split, Handler<const char*>>("bxt_split");
+	wrapper::Add<Cmd_BXT_Splits_Add_Entity, Handler<const char*>, Handler<const char*, const char*>>("bxt_splits_add_entity");
+	wrapper::Add<
+		Cmd_BXT_Splits_Add_Trigger,
+		Handler<float, float, float, float, float, float>,
+		Handler<float, float, float, float, float, float, const char*>,
+		Handler<float, float, float, float, float, float, const char*, const char*>>("bxt_splits_add_trigger");
+	wrapper::Add<Cmd_BXT_Splits_Clear, Handler<>>("bxt_splits_clear");
+	wrapper::Add<Cmd_BXT_Splits_Delete, Handler<>, Handler<const char*>>("bxt_splits_delete");
+	wrapper::Add<Cmd_BXT_Splits_Export, Handler<const char*>>("bxt_splits_export");
+	wrapper::Add<Cmd_BXT_Splits_List, Handler<>, Handler<const char*>>("bxt_splits_list");
+	wrapper::Add<Cmd_BXT_Splits_Print_Times, Handler<>>("bxt_splits_print_times");
+	wrapper::Add<Cmd_BXT_Splits_Set_Map, Handler<const char*>, Handler<const char*, const char*>>("bxt_splits_set_map");
+	wrapper::Add<Cmd_BXT_Splits_Set_Name, Handler<const char*>, Handler<const char*, const char*>>("bxt_splits_set_name");
+	wrapper::Add<Cmd_BXT_Splits_Track_Horizontal_Speed, Handler<int>, Handler<const char*, int>>("bxt_splits_track_horizontal_speed");
+	wrapper::Add<Cmd_BXT_Splits_Track_Vertical_Speed, Handler<int>, Handler<const char*, int>>("bxt_splits_track_vertical_speed");
+	wrapper::Add<Cmd_BXT_Splits_Track_X, Handler<int>, Handler<const char*, int>>("bxt_splits_track_x");
+	wrapper::Add<Cmd_BXT_Splits_Track_Y, Handler<int>, Handler<const char*, int>>("bxt_splits_track_y");
+	wrapper::Add<Cmd_BXT_Splits_Track_Z, Handler<int>, Handler<const char*, int>>("bxt_splits_track_z");
+	wrapper::Add<Cmd_BXT_Splits_Place_Down, Handler<>, Handler<const char*>>("+bxt_splits_place");
+	wrapper::Add<Cmd_BXT_Splits_Place_Up, Handler<>, Handler<const char*>>("-bxt_splits_place");
 }
 
 void HwDLL::InsertCommands()
@@ -3157,6 +5296,8 @@ void HwDLL::InsertCommands()
 						player.Ducking = (pl->v.flags & FL_DUCKING) != 0;
 						player.InDuckAnimation = (pl->v.bInDuck != 0);
 						player.DuckTime = static_cast<float>(pl->v.flDuckTime);
+						player.StaminaTime = pl->v.fuser2;
+						player.Walking = (pl->v.movetype == MOVETYPE_WALK);
 
 						if (ORIG_PF_GetPhysicsKeyValue) {
 							auto slj = std::atoi(ORIG_PF_GetPhysicsKeyValue(pl, "slj"));
@@ -3166,7 +5307,7 @@ void HwDLL::InsertCommands()
 						}
 
 						// Hope the viewangles aren't changed in ClientDLL's HUD_UpdateClientData() (that happens later in Host_Frame()).
-						GetViewangles(player.Viewangles);
+						ClientDLL::GetInstance().pEngfuncs->GetViewAngles(player.Viewangles);
 						//ORIG_Con_Printf("Player viewangles: %f %f %f\n", player.Viewangles[0], player.Viewangles[1], player.Viewangles[2]);
 					}
 				}
@@ -3197,9 +5338,111 @@ void HwDLL::InsertCommands()
 				StrafeState.Duck = currentKeys.Duck.IsDown();
 				PrevStrafeState = StrafeState;
 
+				float health = 0;
+				float armor = 0;
+				edict_t* pl = GetPlayerEdict();
+				if (pl) {
+					health = pl->v.health;
+					armor = pl->v.armorvalue;
+				}
+
+				const auto movement_vars = GetMovementVars();
+
+				std::array<simulation_ipc::PushableInfo, 25> pushables{};
+
+				const auto obbo_pushable = ServerDLL::GetInstance().obboPushable;
+				ServerDLL::GetInstance().obboPushable = nullptr;
+
+				if (simulation_ipc::is_client_initialized()) {
+					size_t i = 0;
+
+					edict_t *edicts;
+					const int numEdicts = GetEdicts(&edicts);
+					for (int e = 0; e < numEdicts; ++e) {
+						const edict_t *ent = edicts + e;
+						if (!IsValidEdict(ent))
+							continue;
+
+						const entvars_t *pev = &(ent->v);
+						if (std::strcmp(GetString(pev->classname), "func_pushable") != 0)
+							continue;
+
+						pushables[i].index = reinterpret_cast<uintptr_t>(pev);
+
+						Vector origin = pev->origin + ((pev->mins + pev->maxs) / 2.f);
+						pushables[i].origin[0] = origin[0];
+						pushables[i].origin[1] = origin[1];
+						pushables[i].origin[2] = origin[2];
+
+						pushables[i].water_level = pev->waterlevel;
+						pushables[i].did_obbo = (pev == obbo_pushable);
+
+						if (++i == pushables.size())
+							break;
+					}
+				}
+
+				StrafeState.TargetYawLookAtOrigin[0] = 0;
+				StrafeState.TargetYawLookAtOrigin[1] = 0;
+				StrafeState.TargetYawLookAtOrigin[2] = 0;
+				if (StrafeState.Parameters.Parameters.LookAt.Entity > 0) {
+					edict_t *edicts;
+					const int numEdicts = GetEdicts(&edicts);
+
+					if (StrafeState.Parameters.Parameters.LookAt.Entity >= (unsigned int) numEdicts) {
+						StrafeState.Parameters.Parameters.LookAt.Entity = 0;
+					} else {				
+						const edict_t *ent = edicts + StrafeState.Parameters.Parameters.LookAt.Entity;
+						const entvars_t *pev = &(ent->v);
+						Vector origin = pev->origin + ((pev->mins + pev->maxs) / 2.f);
+
+						StrafeState.TargetYawLookAtOrigin[0] = origin[0];
+						StrafeState.TargetYawLookAtOrigin[1] = origin[1];
+						StrafeState.TargetYawLookAtOrigin[2] = origin[2];
+					}
+				}
+
+				simulation_ipc::send_simulated_frame_to_server(simulation_ipc::SimulatedFrame {
+					CVars::_bxt_tas_script_generation.GetUint(),
+					movementFrameCounter++,
+					player,
+					StrafeState,
+					PrevFractions,
+					PrevNormalzs,
+					thisFrameIs0ms,
+					movement_vars.Frametime,
+					health,
+					armor,
+					pushables,
+				});
+
 				StartTracing();
-				auto p = HLStrafe::MainFunc(player, GetMovementVars(), f, StrafeState, Buttons, ButtonsPresent, std::bind(&HwDLL::UnsafePlayerTrace, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3), hlstrafe_version);
+				auto p = HLStrafe::MainFunc(
+					player,
+					movement_vars,
+					f,
+					StrafeState,
+					Buttons,
+					ButtonsPresent,
+					std::bind(&HwDLL::UnsafePlayerTrace, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3),
+					std::bind(*(ClientDLL::GetInstance().pEngfuncs->PM_PointContents), std::placeholders::_1, nullptr),
+					hlstrafe_version);
 				StopTracing();
+
+				PrevFractions = { p.fractions[0], p.fractions[1], p.fractions[2], p.fractions[3] };
+				PrevNormalzs = { p.normalzs[0], p.normalzs[1], p.normalzs[2], p.normalzs[3] };
+
+				if (TargetYawOverrideIndex == TargetYawOverrides.size()) {
+					TargetYawOverrides.clear();
+					TargetYawOverrideIndex = 0;
+				}
+
+				if (TargetYawOverrides.empty()) {
+					StrafeState.TargetYawOverrideActive = false;
+				} else {
+					StrafeState.TargetYawOverride = TargetYawOverrides[TargetYawOverrideIndex++];
+					StrafeState.TargetYawOverrideActive = true;
+				}
 
 				f.ResetAutofuncs();
 
@@ -3601,10 +5844,19 @@ void HwDLL::InsertCommands()
 					StrafeState.ChangeTargetYawFinalValue = f.GetChangeFinalValue();
 					StrafeState.ChangeTargetYawOver = f.GetChangeOver();
 					break;
+				case HLTAS::ChangeTarget::TARGET_YAW_OFFSET:
+					StrafeState.ChangeTargetYawOffsetValue = f.GetChangeFinalValue();
+					StrafeState.ChangeTargetYawOffsetOver = f.GetChangeOver();
+					break;
 				default:
 					assert(false);
 					break;
 				}
+			} else if (!f.TargetYawOverride.empty()) {
+				TargetYawOverrides = f.TargetYawOverride;
+				StrafeState.TargetYawOverrideActive = true;
+				StrafeState.TargetYawOverride = TargetYawOverrides[0];
+				TargetYawOverrideIndex = 1;
 			}
 
 			currentFramebulk++;
@@ -3662,6 +5914,8 @@ void HwDLL::InsertCommands()
 					player.Ducking = (pl->v.flags & FL_DUCKING) != 0;
 					player.InDuckAnimation = (pl->v.bInDuck != 0);
 					player.DuckTime = static_cast<float>(pl->v.flDuckTime);
+					player.StaminaTime = pl->v.fuser2;
+					player.Walking = (pl->v.movetype == MOVETYPE_WALK);
 
 					if (ORIG_PF_GetPhysicsKeyValue) {
 						auto slj = std::atoi(ORIG_PF_GetPhysicsKeyValue(pl, "slj"));
@@ -3671,7 +5925,7 @@ void HwDLL::InsertCommands()
 					}
 
 					// Hope the viewangles aren't changed in ClientDLL's HUD_UpdateClientData() (that happens later in Host_Frame()).
-					GetViewangles(player.Viewangles);
+					ClientDLL::GetInstance().pEngfuncs->GetViewAngles(player.Viewangles);
 					//ORIG_Con_Printf("Player viewangles: %f %f %f\n", player.Viewangles[0], player.Viewangles[1], player.Viewangles[2]);
 				}
 			}
@@ -3680,9 +5934,9 @@ void HwDLL::InsertCommands()
 
 			auto playerCopy = HLStrafe::PlayerData(player); // Our copy that we will mess with.
 			auto traceFunc = std::bind(&HwDLL::PlayerTrace, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, false);
-			auto postype = GetPositionType(playerCopy, traceFunc);
-			if (postype == HLStrafe::PositionType::GROUND) {
-				if (ducktap) {
+			auto pointContentsFunc = std::bind(*(ClientDLL::GetInstance().pEngfuncs->PM_PointContents), std::placeholders::_1, nullptr);
+			auto postype = GetPositionType(playerCopy, traceFunc, pointContentsFunc, HLStrafe::MAX_SUPPORTED_VERSION);
+			if (ducktap && postype == HLStrafe::PositionType::GROUND && (autojump == false || (autojump == true && CVars::bxt_tas_ducktap_priority.GetBool()))) {
 					if (!currentKeys.Duck.IsDown() && !playerCopy.InDuckAnimation) {
 						// This should check against the next frame's origin but meh.
 						const float VEC_HULL_MIN[3] = { -16, -16, -36 };
@@ -3695,9 +5949,8 @@ void HwDLL::InsertCommands()
 						if (!tr.StartSolid)
 							Duck = true;
 					}
-				} else if (autojump && !currentKeys.Jump.IsDown()) {
-					Jump = true;
-				}
+			} else if (autojump && !currentKeys.Jump.IsDown() && (postype != HLStrafe::PositionType::AIR || !player.Walking)) {
+				Jump = true;
 			} else if (jumpbug && postype == HLStrafe::PositionType::AIR) {
 				if (player.Ducking) {
 					// Predict what will happen if we unduck.
@@ -3705,7 +5958,7 @@ void HwDLL::InsertCommands()
 					playerCopy.InDuckAnimation = false;
 					playerCopy.DuckTime = 0;
 
-					auto nextPostype = HLStrafe::GetPositionType(playerCopy, traceFunc);
+					auto nextPostype = HLStrafe::GetPositionType(playerCopy, traceFunc, pointContentsFunc, HLStrafe::MAX_SUPPORTED_VERSION);
 					if (nextPostype == HLStrafe::PositionType::GROUND) {
 						// Jumpbug if we're about to land.
 						Jump = true;
@@ -3713,7 +5966,7 @@ void HwDLL::InsertCommands()
 					}
 				} else {
 					auto vars = GetMovementVars();
-					auto nextPostype = HLStrafe::Move(playerCopy, vars, postype, vars.Maxspeed, traceFunc);
+					auto nextPostype = HLStrafe::Move(playerCopy, vars, postype, vars.Maxspeed, traceFunc, pointContentsFunc, HLStrafe::MAX_SUPPORTED_VERSION);
 					if (nextPostype == HLStrafe::PositionType::GROUND) {
 						// Duck to prepare for the Jumpbug.
 						Duck = true;
@@ -3730,7 +5983,7 @@ void HwDLL::InsertCommands()
 			if (jumpbug) {
 				INS(Duck)
 				INS(Jump)
-			} else if (ducktap) {
+			} else if (ducktap && (autojump == false || (autojump == true && CVars::bxt_tas_ducktap_priority.GetBool()))) {
 				INS(Duck)
 			} else if (autojump) {
 				INS(Jump)
@@ -3791,6 +6044,8 @@ HLStrafe::PlayerData HwDLL::GetPlayerData()
 	player.Ducking = (pl->v.flags & FL_DUCKING) != 0;
 	player.InDuckAnimation = (pl->v.bInDuck != 0);
 	player.DuckTime = static_cast<float>(pl->v.flDuckTime);
+	player.StaminaTime = pl->v.fuser2;
+	player.Walking = (pl->v.movetype == MOVETYPE_WALK);
 
 	if (ORIG_PF_GetPhysicsKeyValue) {
 		auto slj = std::atoi(ORIG_PF_GetPhysicsKeyValue(pl, "slj"));
@@ -3799,7 +6054,7 @@ HLStrafe::PlayerData HwDLL::GetPlayerData()
 		player.HasLJModule = false;
 	}
 
-	GetViewangles(player.Viewangles);
+	ClientDLL::GetInstance().pEngfuncs->GetViewAngles(player.Viewangles);
 
 	return player;
 }
@@ -3843,11 +6098,11 @@ void HwDLL::FindCVarsIfNeeded()
 HLStrafe::MovementVars HwDLL::GetMovementVars()
 {
 	auto vars = HLStrafe::MovementVars();
+	auto &cl = ClientDLL::GetInstance();
 
 	FindCVarsIfNeeded();
 	vars.Frametime = GetFrameTime();
 	vars.Maxvelocity = CVars::sv_maxvelocity.GetFloat();
-	vars.Maxspeed = CVars::sv_maxspeed.GetFloat();
 	vars.Stopspeed = CVars::sv_stopspeed.GetFloat();
 	vars.Friction = CVars::sv_friction.GetFloat();
 	vars.Edgefriction = CVars::edgefriction.GetFloat();
@@ -3857,6 +6112,31 @@ HLStrafe::MovementVars HwDLL::GetMovementVars()
 	vars.Stepsize = CVars::sv_stepsize.GetFloat();
 	vars.Bounce = CVars::sv_bounce.GetFloat();
 	vars.Bhopcap = CVars::bxt_bhopcap.GetBool();
+
+	static bool is_paranoia = cl.DoesGameDirMatch("paranoia");
+	static bool is_cstrike = cl.DoesGameDirMatch("cstrike");
+	static bool is_czero = cl.DoesGameDirMatch("czero");
+	static bool is_tfc = cl.DoesGameDirMatch("tfc");
+
+	if (is_paranoia)
+		vars.Maxspeed = cl.pEngfuncs->GetClientMaxspeed() * CVars::sv_maxspeed.GetFloat() / 100.0f; // GetMaxSpeed is factor here
+	else if (cl.pEngfuncs && (cl.pEngfuncs->GetClientMaxspeed() > 0.0f) && (CVars::sv_maxspeed.GetFloat() > cl.pEngfuncs->GetClientMaxspeed()))
+		vars.Maxspeed = cl.pEngfuncs->GetClientMaxspeed(); // Get true maxspeed in other mods (example: CS 1.6)
+	else
+		vars.Maxspeed = CVars::sv_maxspeed.GetFloat();
+
+	if (is_cstrike || is_czero) {
+		vars.BhopcapMultiplier = 0.8f;
+		vars.BhopcapMaxspeedScale = 1.2f;
+		vars.HasStamina = !CVars::bxt_remove_stamina.GetBool();
+		vars.DuckTapSlow = true;
+	} else {
+		vars.BhopcapMultiplier = 0.65f;
+		vars.BhopcapMaxspeedScale = 1.7f;
+	}
+
+	if (!is_cstrike && !is_czero && !is_tfc)
+		vars.UseSlow = true;
 
 	if (svs->num_clients >= 1) {
 		edict_t *pl = GetPlayerEdict();
@@ -3893,14 +6173,34 @@ void HwDLL::KeyUp(Key& key)
 	ORIG_Cbuf_InsertText(ss.str().c_str());
 }
 
+const char* HwDLL::GetMovetypeName(int moveType)
+{
+	switch (moveType)
+	{
+		case MOVETYPE_NONE:             return "None";
+		case MOVETYPE_WALK:             return "Walk";
+		case MOVETYPE_STEP:             return "Step";
+		case MOVETYPE_FLY:              return "Fly";
+		case MOVETYPE_TOSS:             return "Toss";
+		case MOVETYPE_PUSH:             return "Push";
+		case MOVETYPE_NOCLIP:           return "Noclip";
+		case MOVETYPE_FLYMISSILE:       return "Fly-missile";
+		case MOVETYPE_BOUNCE:           return "Bounce";
+		case MOVETYPE_BOUNCEMISSILE:    return "Bounce-missile";
+		case MOVETYPE_FOLLOW:           return "Follow";
+		case MOVETYPE_PUSHSTEP:         return "Push-step";
+		default:                        return "Unknown";
+	}
+}
+
 HOOK_DEF_0(HwDLL, void, __cdecl, Cbuf_Execute)
 {
 	RegisterCVarsAndCommandsIfNeeded();
 
-	UpdateCustomTriggers();
+	UpdateCustomTriggersAndSplits();
 
 	int *state = reinterpret_cast<int*>(cls);
-	int *paused = reinterpret_cast<int*>(sv)+1;
+	int *paused = reinterpret_cast<int*>(psv)+1;
 	static unsigned counter = 1;
 	auto c = counter++;
 	if (CVars::_bxt_taslog.GetBool()){
@@ -3917,6 +6217,15 @@ HOOK_DEF_0(HwDLL, void, __cdecl, Cbuf_Execute)
 		}
 
 		return;
+	}
+
+	simulation_ipc::receive_messages_from_server();
+	if (simulation_ipc::is_client_initialized()
+			&& simulation_ipc::message.command[0] != 0
+			// Starting a TAS in states 2, 3, 4 (loading) leads to crashes or desyncs.
+			&& (*state == 5 || *state == 1)) {
+		ORIG_Cbuf_AddText(simulation_ipc::message.command);
+		simulation_ipc::message.command[0] = 0;
 	}
 
 	if (!finishingLoad && *state == 4 && !executing)
@@ -4101,12 +6410,11 @@ HOOK_DEF_0(HwDLL, void, __cdecl, Cbuf_Execute)
 				} else {
 					auto error = newTASResult.Save(newTASFilename);
 					if (error.Code == HLTAS::ErrorCode::OK)
-						ORIG_Con_Printf("New TAS has been created successfully. Use this bind for launching it:\n bind / \"%s;bxt_tas_loadscript %s\"\n", newTASStartingCommand.c_str(), newTASFilename.c_str());
+						ORIG_Con_Printf("New TAS has been created successfully. Use this bind for launching it:\n bind / \"bxt_tas_loadscript %s\"\n", newTASFilename.c_str());
 					else
 						ORIG_Con_Printf("Error saving the new TAS: %s\n", HLTAS::GetErrorMessage(error).c_str());
 				}
 
-				newTASStartingCommand.clear();
 				newTASFilename.clear();
 				newTASResult.Clear();
 			}
@@ -4136,6 +6444,12 @@ HOOK_DEF_0(HwDLL, void, __cdecl, Cbuf_Execute)
 	}
 	insideCbuf_Execute = false;
 
+	ClientDLL::GetInstance().SetAngleSpeedCap(CVars::bxt_anglespeed_cap.GetBool());
+
+	ClientDLL::GetInstance().SetSpeedScaling(CVars::bxt_speed_scaling.GetBool());
+
+	ServerDLL::GetInstance().SetStamina(CVars::bxt_remove_stamina.GetBool());
+
 	RuntimeData::SaveStored();
 
 	if (CVars::_bxt_taslog.GetBool()) {
@@ -4158,7 +6472,7 @@ void HwDLL::SetPlayerVelocity(float velocity[3])
 	player.Velocity[2] = velocity[2];
 }
 
-bool HwDLL::TryGettingAccurateInfo(float origin[3], float velocity[3], float& health)
+bool HwDLL::TryGettingAccurateInfo(float origin[3], float velocity[3], float& health, float& armorvalue, int& waterlevel, float& stamina)
 {
 	if (!svs || svs->num_clients < 1)
 		return false;
@@ -4174,26 +6488,19 @@ bool HwDLL::TryGettingAccurateInfo(float origin[3], float velocity[3], float& he
 	velocity[1] = pl->v.velocity[1];
 	velocity[2] = pl->v.velocity[2];
 	health = pl->v.health;
+	armorvalue = pl->v.armorvalue;
+	waterlevel = pl->v.waterlevel;
+
+	if (ServerDLL::GetInstance().is_cof) {
+		void* classPtr = (*sv_player)->v.pContainingEntity->pvPrivateData;
+		uintptr_t thisAddr = reinterpret_cast<uintptr_t>(classPtr);
+		float* m_fStamina = reinterpret_cast<float*>(thisAddr + ServerDLL::GetInstance().offm_fStamina);
+		stamina = *m_fStamina;
+	} else {
+		stamina = pl->v.fuser2;
+	}
 
 	return true;
-}
-
-void HwDLL::GetViewangles(float* va)
-{
-	if (clientstate) {
-		float *viewangles = reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(clientstate) + 0x2ABE4);
-		va[0] = viewangles[0];
-		va[1] = viewangles[1];
-		va[2] = viewangles[2];
-	} else
-		ORIG_hudGetViewAngles(va);
-}
-
-void HwDLL::SetViewangles(float* va)
-{
-	if (ClientDLL::GetInstance().pEngfuncs) {
-		ClientDLL::GetInstance().pEngfuncs->SetViewAngles(va);
-	}
 }
 
 HLStrafe::TraceResult HwDLL::PlayerTrace(const float start[3], const float end[3], HLStrafe::HullType hull, bool extendDistanceLimit)
@@ -4303,16 +6610,21 @@ void HwDLL::SaveInitialDataToDemo()
 
 	RuntimeData::Add(std::move(cvar_values));
 
-	if (sv && offMaxEdicts) {
-		const int maxEdicts = *reinterpret_cast<int *>(reinterpret_cast<uintptr_t>(sv) + offMaxEdicts);
+	if (psv && offMaxEdicts) {
+		const int maxEdicts = *reinterpret_cast<int *>(reinterpret_cast<uintptr_t>(psv) + offMaxEdicts);
 		RuntimeData::Add(RuntimeData::Edicts{ maxEdicts });
 	}
+
+	auto &hw = HwDLL::GetInstance();
+	lastRecordedHealth = static_cast<int>((*hw.sv_player)->v.health);
+
+	RuntimeData::Add(RuntimeData::PlayerHealth{lastRecordedHealth});
 
 	// Initial BXT timer value.
 	CustomHud::SaveTimeToDemo();
 }
 
-void HwDLL::UpdateCustomTriggers()
+void HwDLL::UpdateCustomTriggersAndSplits()
 {
 	if (!svs || svs->num_clients < 1)
 		return;
@@ -4322,6 +6634,7 @@ void HwDLL::UpdateCustomTriggers()
 		return;
 
 	CustomTriggers::Update(pl->v.origin, (pl->v.flags & FL_DUCKING) != 0);
+	Splits::Update(pl->v.origin, (pl->v.flags & FL_DUCKING) != 0);
 }
 
 void HwDLL::FreeCamTick()
@@ -4392,10 +6705,13 @@ HOOK_DEF_2(HwDLL, long double, __cdecl, RandomFloat, float, a1, float, a2)
 	return ret;
 }
 
-HOOK_DEF_2(HwDLL, long, __cdecl, RandomLong, long, a1, long, a2)
+HOOK_DEF_2(HwDLL, long, __cdecl, RandomLong, long, low, long, high)
 {
-	auto ret = ORIG_RandomLong(a1, a2);
-	ORIG_Con_Printf("RandomLong(%ld, %ld) => %ld.\n", a1, a2, ret);
+	if (insideSStartDynamicSound && runningFrames)
+		return low;
+
+	auto ret = ORIG_RandomLong(low, high);
+	//ORIG_Con_Printf("RandomLong(%ld, %ld) => %ld.\n", low, high, ret);
 	return ret;
 }
 
@@ -4448,6 +6764,35 @@ HOOK_DEF_1(HwDLL, int, __cdecl, Host_FilterTime, float, passedTime)
 
 	auto minFrametime = CVars::_bxt_min_frametime.GetFloat();
 
+	auto &hw = HwDLL::GetInstance();
+
+	if (pHost_FilterTime_FPS_Cap_Byte)
+	{
+		const auto pByte = *reinterpret_cast<byte*>(pHost_FilterTime_FPS_Cap_Byte);
+		static bool is_0x7E_on_init = (pByte == 0x7E);
+
+		if (CVars::bxt_remove_fps_limit.GetBool() && ((pByte == 0x7E && CVars::sv_cheats.GetBool()) || pByte == 0x75))
+			MemUtils::ReplaceBytes(reinterpret_cast<void*>(pHost_FilterTime_FPS_Cap_Byte), 1, reinterpret_cast<const byte*>("\xEB"));
+
+		if (pByte == 0xEB && ((is_0x7E_on_init && !CVars::sv_cheats.GetBool()) || !CVars::bxt_remove_fps_limit.GetBool()))
+		{
+			if (is_0x7E_on_init)
+				MemUtils::ReplaceBytes(reinterpret_cast<void*>(pHost_FilterTime_FPS_Cap_Byte), 1, reinterpret_cast<const byte*>("\x7E"));
+			else
+				MemUtils::ReplaceBytes(reinterpret_cast<void*>(pHost_FilterTime_FPS_Cap_Byte), 1, reinterpret_cast<const byte*>("\x75"));
+		}
+	}
+
+	if (IsRecordingDemo())
+	{
+		int playerhealth = static_cast<int>((*hw.sv_player)->v.health);
+
+		if (playerhealth != lastRecordedHealth)
+			RuntimeData::Add(RuntimeData::PlayerHealth{playerhealth});
+
+		lastRecordedHealth = playerhealth;
+	}
+
 	if (runningFrames) {
 		auto playbackSpeed = CVars::bxt_tas_playback_speed.GetFloat();
 		if (playbackSpeed != 0 && host_frametime)
@@ -4482,9 +6827,17 @@ HOOK_DEF_0(HwDLL, int, __cdecl, V_FadeAlpha)
 		return ORIG_V_FadeAlpha();
 }
 
+HOOK_DEF_3(HwDLL, void, __cdecl, V_ApplyShake, float*, origin, float*, angles, float, factor)
+{
+	if (CVars::bxt_shake_remove.GetBool() && CVars::sv_cheats.GetBool())
+		return;
+
+	ORIG_V_ApplyShake(origin, angles, factor);
+}
+
 HOOK_DEF_0(HwDLL, void, __cdecl, R_DrawSkyBox)
 {
-	if (CVars::sv_cheats.GetBool() && CVars::bxt_skybox_remove.GetBool())
+	if (CVars::bxt_skybox_remove.GetBool() || (CVars::sv_cheats.GetBool() && CVars::bxt_wallhack.GetBool()))
 		return;
 
 	ORIG_R_DrawSkyBox();
@@ -4526,7 +6879,7 @@ HOOK_DEF_3(HwDLL, int, __cdecl, SV_SpawnServer, int, bIsDemo, char*, server, cha
 HOOK_DEF_0(HwDLL, void, __cdecl, SV_Frame)
 {
 	if (tasLogging) {
-		const bool paused = *(reinterpret_cast<const int *>(sv) + 1) != 0;
+		const bool paused = *(reinterpret_cast<const int *>(psv) + 1) != 0;
 		const int *clstate = reinterpret_cast<const int *>(cls);
 		logWriter.StartPhysicsFrame(*host_frametime, *clstate, paused, loggedCbuf.c_str());
 	}
@@ -4611,6 +6964,13 @@ HOOK_DEF_0(HwDLL, void, __cdecl, CL_Record_f)
 
 HOOK_DEF_1(HwDLL, void, __cdecl, Cbuf_AddText, const char*, text)
 {
+	// We are unpausing from the menu (pressing Esc, or console key while console is visible)
+	// and the TAS editor is in EDIT mode
+	// and HideGameUI wants to add unpause to buffer
+	// skip it
+	if (insideHideGameUI && strcmp("unpause", text) == 0 && tas_editor_mode == TASEditorMode::EDIT)
+		return;
+
 	// This isn't necessarily a bound command
 	// (because something might have been added in the VGUI handler)
 	// but until something like that comes up it should be fine.
@@ -4705,6 +7065,9 @@ HOOK_DEF_2(HwDLL, void, __cdecl, R_DrawSequentialPoly, msurface_t *, surf, int, 
 
 HOOK_DEF_0(HwDLL, void, __cdecl, R_DrawViewModel)
 {
+	if (CVars::bxt_remove_viewmodel.GetBool())
+		return;
+
 	// If the current's frame FOV is not default_fov, we are zoomed in, in that case don't override frustum
 	if (NeedViewmodelAdjustments())
 	{
@@ -4728,12 +7091,32 @@ HOOK_DEF_0(HwDLL, void, __cdecl, R_DrawViewModel)
 	ORIG_R_DrawViewModel();
 }
 
+HOOK_DEF_0(HwDLL, void, __cdecl, R_PreDrawViewModel)
+{
+	if (CVars::bxt_remove_viewmodel.GetBool())
+		return;
+
+	ORIG_R_PreDrawViewModel();
+}
+
 HOOK_DEF_0(HwDLL, void, __cdecl, R_Clear)
 {
 	// This is needed or everything will look washed out or with unintended
 	// motion blur.
-	if (CVars::sv_cheats.GetBool() && (CVars::bxt_wallhack.GetBool() || CVars::bxt_skybox_remove.GetBool())) {
-		glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	if (CVars::bxt_water_remove.GetBool() || CVars::bxt_force_clear.GetBool() || CVars::bxt_disable_world.GetBool() || CVars::bxt_skybox_remove.GetBool() || (CVars::sv_cheats.GetBool() && (CVars::bxt_wallhack.GetBool()))) {
+		if (!CVars::bxt_clear_color.IsEmpty()) {
+			unsigned r = 0, g = 0, b = 0;
+			std::istringstream ss(CVars::bxt_clear_color.GetString());
+			ss >> r >> g >> b;
+
+			static float clearColor[3];
+			clearColor[0] = r / 255.0f;
+			clearColor[1] = g / 255.0f;
+			clearColor[2] = b / 255.0f;
+			glClearColor(clearColor[0], clearColor[1], clearColor[2], 1.0f);
+		} else {
+			glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		}
 		glClear(GL_COLOR_BUFFER_BIT);
 	}
 	ORIG_R_Clear();
@@ -4760,7 +7143,7 @@ HOOK_DEF_3(HwDLL, void, __cdecl, SV_AddLinksToPM_, void *, node, float *, pmove_
 
 HOOK_DEF_2(HwDLL, void, __cdecl, SV_WriteEntitiesToClient, client_t*, client, void*, msg)
 {
-	auto num_edicts = reinterpret_cast<int *>(reinterpret_cast<uintptr_t>(sv) + offNumEdicts);
+	auto num_edicts = reinterpret_cast<int *>(reinterpret_cast<uintptr_t>(psv) + offNumEdicts);
 	const auto orig_num_edicts = *num_edicts;
 	if (CVars::_bxt_norefresh.GetBool())
 		*num_edicts = 0;
@@ -4783,9 +7166,7 @@ HOOK_DEF_1(HwDLL, void, __cdecl, VGuiWrap_Paint, int, paintAll)
 
 HOOK_DEF_3(HwDLL, int, __cdecl, DispatchDirectUserMsg, char*, pszName, int, iSize, void*, pBuf)
 {
-	const char *gameDir = ClientDLL::GetInstance().pEngfuncs->pfnGetGameDirectory();
-
-	if (!std::strcmp(gameDir, "czeror") && !std::strcmp(pszName, "InitHUD"))
+	if (ClientDLL::GetInstance().DoesGameDirContain("czeror") && !std::strcmp(pszName, "InitHUD"))
 		return ORIG_DispatchDirectUserMsg(0, iSize, pBuf);
 	else
 		return ORIG_DispatchDirectUserMsg(pszName, iSize, pBuf);
@@ -4796,9 +7177,8 @@ HOOK_DEF_0(HwDLL, void, __cdecl, SV_SetMoveVars)
 	ORIG_SV_SetMoveVars();
 
 	if (CVars::bxt_force_zmax.GetBool()) {
-		if (movevars && offZmax) {
-			auto movevars_zmax = reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(movevars) + offZmax);
-			*movevars_zmax = CVars::bxt_force_zmax.GetFloat();
+		if (movevars) {
+			movevars->zmax = CVars::bxt_force_zmax.GetFloat();
 		}
 	}
 }
@@ -4807,8 +7187,8 @@ HOOK_DEF_0(HwDLL, void, __cdecl, R_StudioCalcAttachments)
 {
 	const auto &cl = ClientDLL::GetInstance();
 
-	if (cl.pEngfuncs && ORIG_studioapi_GetCurrentEntity) {
-		auto currententity = ORIG_studioapi_GetCurrentEntity();
+	if (cl.pEngfuncs && pEngStudio) {
+		auto currententity = pEngStudio->GetCurrentEntity();
 		if (currententity == cl.pEngfuncs->GetViewModel() && NeedViewmodelAdjustments())
 			insideRStudioCalcAttachmentsViewmodel = true;
 	}
@@ -4832,4 +7212,274 @@ HOOK_DEF_3(HwDLL, void, __cdecl, VectorTransform, float*, in1, float*, in2, floa
 		out[1] = vOrigin[1];
 		out[2] = vOrigin[2];
 	}
+}
+
+HOOK_DEF_2(HwDLL, void, __cdecl, EmitWaterPolys, msurface_t *, fa, int, direction)
+{
+	if (CVars::bxt_water_remove.GetBool())
+		return;
+
+	ORIG_EmitWaterPolys(fa, direction);
+}
+
+HOOK_DEF_8(HwDLL, void, __cdecl, S_StartDynamicSound, int, entnum, int, entchannel, void*, sfx, vec_t*, origin,
+                                                      float, fvol, float, attenuation, int, flags, int, pitch)
+{
+	insideSStartDynamicSound = true;
+
+	ORIG_S_StartDynamicSound(entnum, entchannel, sfx, origin, fvol, attenuation, flags, pitch);
+
+	insideSStartDynamicSound = false;
+}
+
+HOOK_DEF_3(HwDLL, void, __cdecl, VGuiWrap2_NotifyOfServerConnect, const char*, game, int, IP, int, port)
+{
+	// This function calls a function of interest in GameUI.dll and passes its
+	// arguments there, so it is hooked to avoid adding a separate module.
+	// This fixes MP3 sound stopping on level transitions in mods.
+	// https://github.com/ValveSoftware/halflife/issues/570#issuecomment-486069492
+
+	ORIG_VGuiWrap2_NotifyOfServerConnect("valve", IP, port);
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, R_StudioSetupBones)
+{
+	if (pstudiohdr && pEngStudio) {
+		auto& cl = ClientDLL::GetInstance();
+		auto currententity = pEngStudio->GetCurrentEntity();
+		auto pseqdesc = reinterpret_cast<mstudioseqdesc_t*>(reinterpret_cast<byte*>(*pstudiohdr) +
+			(*pstudiohdr)->seqindex) + currententity->curstate.sequence;
+
+		if (cl.pEngfuncs) {
+			if (currententity == cl.pEngfuncs->GetViewModel()) {
+				if (cl.orig_righthand_not_found && CVars::cl_righthand.GetFloat() > 0)
+				{
+					float(*rotationmatrix)[3][4] = reinterpret_cast<float(*)[3][4]>(pEngStudio->StudioGetRotationMatrix());
+
+					(*rotationmatrix)[0][1] *= -1;
+					(*rotationmatrix)[1][1] *= -1;
+					(*rotationmatrix)[2][1] *= -1;
+				}
+
+				if (CVars::bxt_viewmodel_disable_idle.GetBool()) {
+					if (strstr(pseqdesc->label, "idle") != NULL || strstr(pseqdesc->label, "fidget") != NULL) {
+						currententity->curstate.framerate = 0; // don't animate at all
+					}
+				}
+
+				if (CVars::bxt_viewmodel_disable_equip.GetBool()) {
+					if (strstr(pseqdesc->label, "holster") != NULL || strstr(pseqdesc->label, "draw") != NULL ||
+						strstr(pseqdesc->label, "deploy") != NULL || strstr(pseqdesc->label, "up") != NULL ||
+						strstr(pseqdesc->label, "down") != NULL) {
+						currententity->curstate.sequence = 0; // instead set to idle sequence
+						pseqdesc = reinterpret_cast<mstudioseqdesc_t*>(reinterpret_cast<byte*>(*pstudiohdr) +
+							(*pstudiohdr)->seqindex) + currententity->curstate.sequence;
+						pseqdesc->numframes = 1;
+						pseqdesc->fps = 1;
+					}
+				}
+			}
+		}
+	}
+
+	ORIG_R_StudioSetupBones();
+}
+
+HOOK_DEF_1(HwDLL, void, __cdecl, MD5Init, MD5Context_t*, context)
+{
+	ORIG_MD5Init(context);
+}
+
+HOOK_DEF_3(HwDLL, void, __cdecl, MD5Update, MD5Context_t*, context, unsigned char const*, buf, unsigned int, len)
+{
+	ORIG_MD5Update(context, buf, len);
+}
+
+HOOK_DEF_2(HwDLL, void, __cdecl, MD5Final, unsigned char*, digest, MD5Context_t*, context)
+{
+	ORIG_MD5Final(digest, context);
+}
+
+HOOK_DEF_2(HwDLL, void, __cdecl, MD5Transform, unsigned int*, buf, unsigned int const*, in)
+{
+	ORIG_MD5Transform(buf, in);
+}
+
+HOOK_DEF_5(HwDLL, int, __cdecl, MD5_Hash_File, unsigned char*, digest, char*, pszFileName, int, bUsefopen, int, bSeed, unsigned int*, seed)
+{
+	return ORIG_MD5_Hash_File(digest, pszFileName, bUsefopen, bSeed, seed);
+}
+
+HOOK_DEF_1(HwDLL, char*, __cdecl, MD5_Print, unsigned char*, hash)
+{
+	return ORIG_MD5_Print(hash);
+}
+
+HOOK_DEF_1(HwDLL, void, __fastcall, CBaseUI__HideGameUI, void*, thisptr)
+{
+	insideHideGameUI = true;
+	ORIG_CBaseUI__HideGameUI(thisptr);
+	insideHideGameUI = false;
+}
+
+HOOK_DEF_1(HwDLL, void, __cdecl, CBaseUI__HideGameUI_Linux, void*, thisptr)
+{
+	insideHideGameUI = true;
+	ORIG_CBaseUI__HideGameUI_Linux(thisptr);
+	insideHideGameUI = false;
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, R_DrawWorld)
+{
+	if (CVars::bxt_disable_world.GetBool())
+		return;
+
+	ORIG_R_DrawWorld();
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, R_DrawParticles)
+{
+	if (CVars::bxt_disable_particles.GetBool())
+		return;
+
+	ORIG_R_DrawParticles();
+}
+
+HOOK_DEF_0(HwDLL, int, __cdecl, BUsesSDLInput)
+{
+	if (ClientDLL::GetInstance().DoesGameDirMatch("bshift_cutsceneless") || CVars::bxt_fix_mouse_horizontal_limit.GetBool())
+		return true;
+	else
+		return ORIG_BUsesSDLInput();
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, R_StudioRenderModel)
+{
+	if (pEngStudio) {
+		auto& cl = ClientDLL::GetInstance();
+		auto currententity = pEngStudio->GetCurrentEntity();
+
+		int old_rendermode = currententity->curstate.rendermode;
+
+		if (cl.pEngfuncs) {
+			if (currententity == cl.pEngfuncs->GetViewModel()) {
+				if (CVars::bxt_viewmodel_semitransparent.GetBool()) {
+				cl.pEngfuncs->pTriAPI->RenderMode(kRenderTransAdd);
+				cl.pEngfuncs->pTriAPI->Brightness(2);
+			} else {
+				cl.pEngfuncs->pTriAPI->RenderMode(old_rendermode); }
+			}
+		}
+	}
+
+	ORIG_R_StudioRenderModel();
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, R_SetFrustum)
+{
+	if (CVars::bxt_force_fov.GetFloat() >= 1.0)
+		*scr_fov_value = CVars::bxt_force_fov.GetFloat();
+
+	ORIG_R_SetFrustum();
+}
+
+HOOK_DEF_4(HwDLL, void, __cdecl, SPR_Set, HSPRITE_HL, hSprite, int, r, int, g, int, b)
+{
+	auto& cl = ClientDLL::GetInstance();
+
+	if (cl.custom_hud_color_set && !cl.bxt_hud_color_set && !insideDrawCrosshair && !cl.insideDrawAmmoHistory && !cl.insideDrawHealthDamage && !cl.insideDrawHealthPain && !cl.insideDrawNightVision && !cl.insideDrawFiberCameraCZDS && !cl.insideDrawHudIconsCZDS)
+	{
+		r = cl.custom_r;
+		g = cl.custom_g;
+		b = cl.custom_b;
+	}
+
+	ORIG_SPR_Set(hSprite, r, g, b);
+}
+
+HOOK_DEF_2(HwDLL, void, __cdecl, DrawCrosshair, int, x, int, y)
+{
+	insideDrawCrosshair = true;
+	ORIG_DrawCrosshair(x, y);
+	insideDrawCrosshair = false;
+}
+
+HOOK_DEF_8(HwDLL, void, __cdecl, Draw_FillRGBA, int, x, int, y, int, w, int, h, int, r, int, g, int, b, int, a)
+{
+	auto& cl = ClientDLL::GetInstance();
+
+	if (cl.custom_hud_color_set && !cl.bxt_hud_color_fill)
+	{
+		r = cl.custom_r;
+		g = cl.custom_g;
+		b = cl.custom_b;
+	}
+
+	if (cl.custom_hud_color_set)
+		a = 255;
+	else if (CVars::bxt_hud_game_alpha.GetInt() >= 1 && CVars::bxt_hud_game_alpha.GetInt() <= 255)
+		a = CVars::bxt_hud_game_alpha.GetInt();
+
+	ORIG_Draw_FillRGBA(x, y, w, h, r, g, b, a);
+}
+
+HOOK_DEF_5(HwDLL, void, __cdecl, PF_traceline_DLL, const Vector*, v1, const Vector*, v2, int, fNoMonsters, edict_t*, pentToSkip, TraceResult*, ptr)
+{
+	ORIG_PF_traceline_DLL(v1, v2, fNoMonsters, pentToSkip, ptr);
+
+	ServerDLL::GetInstance().TraceLineWrap(v1, v2, fNoMonsters, pentToSkip, ptr);
+}
+
+HOOK_DEF_1(HwDLL, qboolean, __cdecl, CL_CheckGameDirectory, char*, gamedir)
+{
+	auto& cl = ClientDLL::GetInstance();
+
+	if (cl.pEngfuncs && cl.pEngfuncs->pDemoAPI->IsPlayingback() && CVars::bxt_disable_gamedir_check_in_demo.GetBool())
+		return true;
+	else
+		return ORIG_CL_CheckGameDirectory(gamedir);
+}
+
+HOOK_DEF_0(HwDLL, int, __cdecl, Host_ValidSave)
+{
+	if (cofSaveHack) {
+		*cofSaveHack = CVars::bxt_cof_disable_save_lock.GetBool() ? 1 : 0;
+	}
+
+	return ORIG_Host_ValidSave();
+}
+
+HOOK_DEF_2(HwDLL, int, __cdecl, SaveGameSlot, const char*, pSaveName, const char*, pSaveComment)
+{
+	auto rv = ORIG_SaveGameSlot(pSaveName, pSaveComment);
+	// Cry of Fear-specific, draw "Saved..." on the screen.
+	if (ORIG_CL_HudMessage)
+		ORIG_CL_HudMessage("GAMESAVED");
+
+	return rv;
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, SCR_NetGraph)
+{
+	ORIG_SCR_NetGraph();
+
+	// Draw "PAUSED" on the screen in pre-Steampipe builds.
+	if (ORIG_VGuiWrap2_IsGameUIVisible && ORIG_SCR_DrawPause)
+	{
+		if (ORIG_VGuiWrap2_IsGameUIVisible() == 0)
+			ORIG_SCR_DrawPause();
+	}
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, Host_Shutdown)
+{
+	ORIG_Host_Shutdown();
+	Unhook();
+	SDL::GetInstance().Unhook();
+}
+
+HOOK_DEF_0(HwDLL, void, __cdecl, ReleaseEntityDlls)
+{
+	ServerDLL::GetInstance().Unhook();
+	ORIG_ReleaseEntityDlls();
 }

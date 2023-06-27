@@ -33,6 +33,9 @@ Use the [Bunnymod XT Launcher](https://github.com/YaLTeR/bxt-launcher).
 - **BXT_SCRIPT** - if set to a filename of a hltas script, loads the non-shared RNG from that script on load.
 - **BXT_LOGFILE** - if set, logs all Bunnymod XT messages into a file with that filename.
 - **SPTLIB_DEBUG** - if set to 1, logs all dlopen, dlclose and dlsym calls.
+- **BXT_DISABLE_DEBUG_CONSOLE** - if set, disables the Bunnymod XT debug console.
+- **BXT_DISABLE_DISCORD_RPC** - if set, disables the Discord RPC module.
+- **BXT_DISABLE_VSYNC** - if set, disables the V-Sync on initialization (Windows-only).
 
 ## Building
 
@@ -40,7 +43,7 @@ Use the [Bunnymod XT Launcher](https://github.com/YaLTeR/bxt-launcher).
 
 Building on Windows requires
 
-- Visual Studio 2017 or 2019
+- Visual Studio 2019 or 2022
 - [Boost](http://www.boost.org/)
 - [Rust](https://rustup.rs/)
   - The `i686-pc-windows-msvc` target must be installed. You can do that using `rustup target add i686-pc-windows-msvc`.

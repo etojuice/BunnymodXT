@@ -22,11 +22,34 @@ class ClientDLL : public IHookableNameFilter
 	HOOK_DECL(void, __cdecl, HUD_DrawTransparentTriangles)
 	HOOK_DECL(int, __cdecl, HUD_Key_Event, int down, int keynum, const char* pszCurrentBinding)
 	HOOK_DECL(int, __cdecl, HUD_UpdateClientData, client_data_t* pcldata, float flTime)
-	HOOK_DECL(void, __fastcall, StudioCalcAttachments, void* thisptr)
-	HOOK_DECL(void, __cdecl, StudioCalcAttachments_Linux, void* thisptr)
+	HOOK_DECL(void, __fastcall, CStudioModelRenderer__StudioCalcAttachments, void* thisptr)
+	HOOK_DECL(void, __cdecl, CStudioModelRenderer__StudioCalcAttachments_Linux, void* thisptr)
 	HOOK_DECL(void, __cdecl, VectorTransform, float *in1, float *in2, float *out)
 	HOOK_DECL(void, __cdecl, EV_GetDefaultShellInfo, event_args_t *args, float *origin, float *velocity, float *ShellVelocity, float *ShellOrigin,
 	          float *forward, float *right, float *up, float forwardScale, float upScale, float rightScale)
+	HOOK_DECL(void, __fastcall, CStudioModelRenderer__StudioSetupBones, void* thisptr)
+	HOOK_DECL(void, __cdecl, CStudioModelRenderer__StudioSetupBones_Linux, void* thisptr)
+	HOOK_DECL(int, __cdecl, HUD_AddEntity, int type, cl_entity_s *ent, char *modelname)
+	HOOK_DECL(int, __cdecl, CL_IsThirdPerson)
+	HOOK_DECL(void, __fastcall, CStudioModelRenderer__StudioRenderModel, void* thisptr)
+	HOOK_DECL(void, __cdecl, CStudioModelRenderer__StudioRenderModel_Linux, void* thisptr)
+	HOOK_DECL(void, __cdecl, ScaleColors, int* r, int* g, int* b, int a)
+	HOOK_DECL(int, __fastcall, HistoryResource__DrawAmmoHistory, void *thisptr, int edx, float flTime)
+	HOOK_DECL(int, __cdecl, HistoryResource__DrawAmmoHistory_Linux, void *thisptr, float flTime)
+	HOOK_DECL(int, __fastcall, CHudHealth__DrawDamage, void *thisptr, int edx, float flTime)
+	HOOK_DECL(int, __cdecl, CHudHealth__DrawDamage_Linux, void *thisptr, float flTime)
+	HOOK_DECL(int, __fastcall, CHudHealth__DrawPain, void *thisptr, int edx, float flTime)
+	HOOK_DECL(int, __cdecl, CHudHealth__DrawPain_Linux, void *thisptr, float flTime)
+	HOOK_DECL(void, __fastcall, CHudFlashlight__drawNightVision, void* thisptr)
+	HOOK_DECL(void, __cdecl, CHudFlashlight__drawNightVision_Linux, void* thisptr)
+	HOOK_DECL(bool, __fastcall, CHud__DrawHudNightVision, void *thisptr, int edx, float flTime)
+	HOOK_DECL(bool, __cdecl, CHud__DrawHudNightVision_Linux, void *thisptr, float flTime)
+	HOOK_DECL(bool, __fastcall, CHud__DrawHudFiberCamera, void *thisptr, int edx, float flTime)
+	HOOK_DECL(bool, __cdecl, CHud__DrawHudFiberCamera_Linux, void *thisptr, float flTime)
+	HOOK_DECL(int, __fastcall, CHudIcons__Draw, void *thisptr, int edx, float flTime)
+	HOOK_DECL(int, __cdecl, CHudIcons__Draw_Linux, void *thisptr, float flTime)
+	HOOK_DECL(void, __cdecl, V_PunchAxis, int axis, float punch)
+	HOOK_DECL(void, __cdecl, HUD_Shutdown)
 
 public:
 	static ClientDLL& GetInstance()
@@ -53,10 +76,44 @@ public:
 
 	void StudioAdjustViewmodelAttachments(Vector &vOrigin);
 
+	bool DoesGameDirMatch(const char *game);
+	bool DoesGameDirContain(const char *game);
+
+	size_t GetMapName(char* dest, size_t count);
+	bool DoesMapNameMatch(const char *map);
+	bool DoesMapNameContain(const char *map);
+
+	bool orig_forcehltv_found = false;
+	bool orig_righthand_not_found = false;
+
+	unsigned char custom_r, custom_g, custom_b;
+	bool custom_hud_color_set = false;
+	bool bxt_hud_color_set = false;
+	bool bxt_hud_color_fill = false;
+
+	bool insideDrawAmmoHistory = false;
+	bool insideDrawHealthDamage = false;
+	bool insideDrawHealthPain = false;
+	bool insideDrawNightVision = false;
+	bool insideDrawFiberCameraCZDS = false;
+	bool insideDrawHudIconsCZDS = false;
+	float drawdamage_flTime;
+
 	unsigned short last_buttons;
 
 	// When set to false, the mouse won't move the camera.
 	void SetMouseState(bool active);
+
+	Vector AnglesToForward(const Vector &angles);
+
+	void SetAngleSpeedCap(bool capped);
+
+	void SetSpeedScaling(bool scaled);
+
+	void FileBase(const char *in, char *out);
+	void ConvertToLowerCase(const char *str);
+
+	void SetupTraceVectors(float start[3], float end[3]);
 
 private:
 	ClientDLL() : IHookableNameFilter({ L"client.dll", L"client.so" }) {};
@@ -77,10 +134,19 @@ protected:
 	void **ppmove;
 	ptrdiff_t offOldbuttons;
 	ptrdiff_t offOnground;
+	ptrdiff_t offIUser1;
 
 	ptrdiff_t offBhopcap;
 	ptrdiff_t pBhopcapWindows;
 	byte originalBhopcapInsn[6];
+
+	ptrdiff_t pCS_AngleSpeedCap;
+	ptrdiff_t pCS_AngleSpeedCap_Linux;
+
+	ptrdiff_t pCS_SpeedScaling;
+	ptrdiff_t pCS_SpeedScaling_Linux;
+
+	ptrdiff_t offVectorTransform;
 
 	bool cantJumpNextTime;
 
@@ -88,4 +154,7 @@ protected:
 
 	bool insideKeyEvent;
 	bool insideStudioCalcAttachmentsViewmodel;
+
+	ptrdiff_t offpCurrentEntity;
+	ptrdiff_t offpStudioHeader;
 };

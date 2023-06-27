@@ -7,6 +7,7 @@
 #include "interprocess.hpp"
 #include "runtime_data.hpp"
 #include "opengl_utils.hpp"
+#include "splits.hpp"
 
 #include <GL/gl.h>
 
@@ -25,6 +26,7 @@ namespace CustomHud
 	static bool receivedAccurateInfo = false;
 	static playerinfo player;
 	bool countingTime = false;
+	bool invalidRun = false;
 	int hours = 0, minutes = 0, seconds = 0;
 	double timeRemainder = 0.0;
 	int frames = 0;
@@ -67,10 +69,23 @@ namespace CustomHud
 
 		double pitch;
 		double yaw;
+		unsigned count;
 		bool pitch_present;
 		bool yaw_present;
+		bool count_present;
 
 		std::string commands;
+
+		float vel;
+		float zvel;
+		float pos[3];
+		float realyaw;
+		float health;
+		float armor;
+
+		float stamina;
+
+		std::string frametime;
 	};
 	static FrameBulkStatus frame_bulk_status;
 	static bool frame_bulk_selected;
@@ -160,14 +175,20 @@ namespace CustomHud
 	{
 		assert(digit >= 0 && digit <= 9);
 
+		ClientDLL::GetInstance().bxt_hud_color_set = true;
 		ClientDLL::GetInstance().pEngfuncs->pfnSPR_Set(NumberSprites[digit], r, g, b);
+		ClientDLL::GetInstance().bxt_hud_color_set = false;
+
 		ClientDLL::GetInstance().pEngfuncs->pfnSPR_DrawAdditive(0, x, y, &NumberSpriteRects[digit]);
 	}
 
 	static inline int DrawBitmap(int x, int y, const int bitmap[], int width, int height, int r, int g, int b) {
 		for (int i = 0; i < height; i++)
-			for (int j = 0; j < width; j++)
+			for (int j = 0; j < width; j++) {
+				ClientDLL::GetInstance().bxt_hud_color_fill = true;
 				ClientDLL::GetInstance().pEngfuncs->pfnFillRGBA(x + j, y + i, 1, 1, r, g, b, bitmap[i * width + j]);
+				ClientDLL::GetInstance().bxt_hud_color_fill = false;
+			}
 
 		return width;
 	}
@@ -329,6 +350,22 @@ namespace CustomHud
 		return DrawNumber(number, x, y, hudColor[0], hudColor[1], hudColor[2], fieldMinWidth);
 	}
 
+	static inline int DrawNumberTimer(int number, int x, int y, int fieldMinWidth = 1)
+	{
+		if (invalidRun)
+			return DrawNumber(number, x, y, 240, 0, 0, fieldMinWidth);
+		else
+			return DrawNumber(number, x, y, hudColor[0], hudColor[1], hudColor[2], fieldMinWidth);
+	}
+
+	static int DrawNumberTimer(int number, int x, int y, int r, int g, int b, int fieldMinWidth = 1)
+	{
+		if (invalidRun)
+			return DrawNumber(number, x, y, 240, 0, 0, fieldMinWidth);
+		else
+			return DrawNumber(number, x, y, r, g, b, fieldMinWidth);
+	}
+
 	static void DrawDecimalSeparator(int x, int y, int r, int g, int b)
 	{
 		x += (NumberWidth - 6) / 2;
@@ -338,7 +375,10 @@ namespace CustomHud
 
 	static void DrawDecimalSeparator(int x, int y)
 	{
-		return DrawDecimalSeparator(x, y, hudColor[0], hudColor[1], hudColor[2]);
+		if (invalidRun)
+			return DrawDecimalSeparator(x, y, 240, 0, 0);
+		else
+			return DrawDecimalSeparator(x, y, hudColor[0], hudColor[1], hudColor[2]);
 	}
 
 	static void DrawColon(int x, int y, int r, int g, int b)
@@ -351,7 +391,10 @@ namespace CustomHud
 
 	static void DrawColon(int x, int y)
 	{
-		return DrawColon(x, y, hudColor[0], hudColor[1], hudColor[2]);
+		if (invalidRun)
+			return DrawColon(x, y, 240, 0, 0);
+		else
+			return DrawColon(x, y, hudColor[0], hudColor[1], hudColor[2]);
 	}
 
 	static void GetPosition(const CVarWrapper& Offset, const CVarWrapper& Anchor, int* x, int* y, int rx = 0, int ry = 0)
@@ -391,8 +434,8 @@ namespace CustomHud
 
 	void GetAccurateInfo()
 	{
-		receivedAccurateInfo = HwDLL::GetInstance().TryGettingAccurateInfo(player.origin, player.velocity, player.health);
-		HwDLL::GetInstance().GetViewangles(player.viewangles);
+		receivedAccurateInfo = HwDLL::GetInstance().TryGettingAccurateInfo(player.origin, player.velocity, player.health, player.armorvalue, player.waterlevel, player.stamina);
+		ClientDLL::GetInstance().pEngfuncs->GetViewAngles(player.viewangles);
 	}
 
 	static void UpdateColors()
@@ -456,10 +499,41 @@ namespace CustomHud
 		}
 	}
 
+	static void DrawQuickGauss(float flTime)
+	{
+		if (CVars::bxt_hud_quickgauss.GetBool())
+		{
+			int x, y;
+			GetPosition(CVars::bxt_hud_quickgauss_offset, CVars::bxt_hud_quickgauss_anchor, &x, &y, 150, 0);
+
+			std::ostringstream out;
+			out.setf(std::ios::fixed);
+			out.precision(precision);
+
+			auto time = ServerDLL::GetInstance().GetTime();
+			auto v_forward = ClientDLL::GetInstance().AnglesToForward(player.viewangles);
+			float flDamage = 200;
+			if (time < 4.0f)
+				flDamage = 200 * time / 4;
+
+			auto vel_gain = v_forward * flDamage * 5;
+			auto ups = static_cast<int>(trunc(length(vel_gain[0], vel_gain[1])));
+
+			out << "Server time: " << time << "\n";
+
+			if (CVars::bxt_hud_quickgauss.GetInt() != 2)
+				out << "Qgauss dmg: " << flDamage << "\n" << "Qgauss boost: " << ups;
+
+			DrawMultilineString(x, y, out.str());
+		}
+	}
+
 	static void DrawOrigin(float flTime)
 	{
 		if (CVars::bxt_hud_origin.GetBool())
 		{
+			const auto& cl = ClientDLL::GetInstance();
+
 			int x, y;
 			GetPosition(CVars::bxt_hud_origin_offset, CVars::bxt_hud_origin_anchor, &x, &y, -200, (si.iCharHeight * 6) + 1);
 
@@ -473,9 +547,19 @@ namespace CustomHud
 			std::ostringstream out;
 			out.setf(std::ios::fixed);
 			out.precision(precision);
-			out << "X: " << player.origin[0] << "\n"
-				<< "Y: " << player.origin[1] << "\n"
-				<< "Z: " << player.origin[2];
+
+			if (CVars::bxt_hud_origin.GetInt() == 2)
+			{
+				out << "X: " << cl.last_vieworg[0] << "\n"
+					<< "Y: " << cl.last_vieworg[1] << "\n"
+					<< "Z: " << cl.last_vieworg[2];
+			}
+			else
+			{
+				out << "X: " << player.origin[0] << "\n"
+					<< "Y: " << player.origin[1] << "\n"
+					<< "Z: " << player.origin[2];
+			}
 
 			DrawMultilineString(x, y, out.str());
 		}
@@ -485,14 +569,27 @@ namespace CustomHud
 	{
 		if (CVars::bxt_hud_viewangles.GetBool())
 		{
+			const auto& cl = ClientDLL::GetInstance();
+
 			int x, y;
 			GetPosition(CVars::bxt_hud_viewangles_offset, CVars::bxt_hud_viewangles_anchor, &x, &y, -200, (si.iCharHeight * 10) + 2);
 
 			std::ostringstream out;
 			out.setf(std::ios::fixed);
 			out.precision(precision);
-			out << "Pitch: " << player.viewangles[0] << "\n"
+
+			if (CVars::bxt_hud_viewangles.GetInt() == 2)
+			{
+				out << "Angles (incl. punch):" << "\n"
+				<< "Pitch: " << cl.last_viewangles[0] << "\n"
+				<< "Yaw: " << cl.last_viewangles[1];
+			}
+			else
+			{
+				out << "Angles:" << "\n"
+				<< "Pitch: " << player.viewangles[0] << "\n"
 				<< "Yaw: " << player.viewangles[1];
+			}
 
 			DrawMultilineString(x, y, out.str());
 		}
@@ -528,7 +625,21 @@ namespace CustomHud
 				if ((player.velocity[2] != 0.0f && prevVel[2] == 0.0f)
 					|| (player.velocity[2] > 0.0f && prevVel[2] < 0.0f))
 				{
-					double difference = length(player.velocity[0], player.velocity[1]) - jumpSpeed;
+					double speed = length(prevVel[0], prevVel[1]);
+					bool is_ducktap = player.velocity[2] < 0.0f && prevVel[2] == 0.0f;
+
+					if (CVars::bxt_bhopcap.GetBool() && !is_ducktap && player.waterlevel == 0)
+					{
+						HLStrafe::MovementVars vars = HwDLL::GetInstance().GetMovementVars();
+						auto maxscaledspeed = vars.BhopcapMaxspeedScale * vars.Maxspeed;
+						if (maxscaledspeed > 0) {
+							auto xyz_speed = length(prevVel[0], prevVel[1], prevVel[2]);
+							if (xyz_speed > maxscaledspeed)
+								speed *= (maxscaledspeed / xyz_speed) * vars.BhopcapMultiplier;
+						}
+					}
+
+					double difference = speed - jumpSpeed;
 					if (difference != 0.0f)
 					{
 						if (difference > 0.0f)
@@ -545,7 +656,7 @@ namespace CustomHud
 						}
 
 						passedTime = 0.0;
-						jumpSpeed = length(player.velocity[0], player.velocity[1]);
+						jumpSpeed = speed;
 					}
 				}
 
@@ -576,6 +687,58 @@ namespace CustomHud
 		vecCopy(player.velocity, prevVel);
 	}
 
+	static void DrawJumpDistance(float flTime)
+	{
+		static float prevOrigin[3] = { 0.0f, 0.0f, 0.0f };
+		static float prevPlayerOrigin[3] = { 0.0f, 0.0f, 0.0f };
+		static float prevVel[3] = { 0.0f, 0.0f, 0.0f };
+
+		if (CVars::bxt_hud_jumpdistance.GetBool())
+		{
+			static bool inJump = false;
+			static double jumpDistance = 0.0;
+
+			// 1 = jumpdistance will update when velocity is reasonably positive
+			// not 1 = jumpdistance will update when velocity changes, eg just falling
+			if (!inJump && (
+				(((CVars::bxt_hud_jumpdistance.GetInt() == 1) ?
+					player.velocity[2] > 0.0f : player.velocity[2] != 0.0f) && prevVel[2] == 0.0f) ||
+				(player.velocity[2] > 0.0f && prevVel[2] < 0.0f)))
+			{
+				inJump = true;
+
+				// by the time the instantaneous velocity is here
+				// there is already displacement, which is in the previous frame
+				vecCopy(prevPlayerOrigin, prevOrigin);
+			}
+			else if (inJump && ((player.velocity[2] == 0.0f && prevVel[2] < 0.0f)))
+			{
+				inJump = false;
+
+				// add 16*2 because of player size can reach the edge of the block up to 16 unit
+				double distance = length(player.origin[0] - prevOrigin[0], player.origin[1] - prevOrigin[1]) + 32.0;
+
+				if (distance > 150.0 || CVars::bxt_hud_jumpdistance.GetInt() != 1) // from uq_jumpstats default
+				{
+					jumpDistance = distance;
+				}
+			}
+			else if (inJump && player.origin[2] == prevPlayerOrigin[2])
+			{
+				// walking
+				inJump = false;
+			}
+
+			int x, y;
+			GetPosition(CVars::bxt_hud_jumpdistance_offset, CVars::bxt_hud_jumpdistance_anchor, &x, &y, 0, -4 * NumberHeight);
+			DrawNumber(static_cast<int>(trunc(jumpDistance)), x, y, hudColor[0], hudColor[1], hudColor[2]);
+		}
+
+		vecCopy(player.origin, prevPlayerOrigin);
+		vecCopy(player.velocity, prevVel);
+	}
+
+
 	void DrawTimer(float flTime)
 	{
 		if (CVars::bxt_hud_timer.GetBool())
@@ -583,9 +746,12 @@ namespace CustomHud
 			int x, y;
 			GetPosition(CVars::bxt_hud_timer_offset, CVars::bxt_hud_timer_anchor, &x, &y, 0, 0);
 
+			if (invalidRun)
+				DrawMultilineString(x, y + NumberHeight, "Invalid run", 1.0f, 0.0f, 0.0f);
+
 			if (hours)
 			{
-				x = DrawNumber(hours, x, y);
+				x = DrawNumberTimer(hours, x, y);
 				DrawColon(x, y);
 				x += NumberWidth;
 			}
@@ -593,37 +759,19 @@ namespace CustomHud
 			if (hours || minutes)
 			{
 				int fieldMinWidth = (hours && minutes < 10) ? 2 : 1;
-				x = DrawNumber(minutes, x, y, fieldMinWidth);
+				x = DrawNumberTimer(minutes, x, y, fieldMinWidth);
 				DrawColon(x, y);
 				x += NumberWidth;
 			}
 
 			int fieldMinWidth = ((hours || minutes) && seconds < 10) ? 2 : 1;
-			x = DrawNumber(seconds, x, y, fieldMinWidth);
+			x = DrawNumberTimer(seconds, x, y, fieldMinWidth);
 
 			DrawDecimalSeparator(x, y);
 			x += NumberWidth;
 
-			DrawNumber(static_cast<int>(timeRemainder * 1000), x, y, 3);
+			DrawNumberTimer(static_cast<int>(timeRemainder * 1000), x, y, 3);
 		}
-	}
-
-	static void SetupTraceVectors(float start[3], float end[3])
-	{
-		const auto& cl = ClientDLL::GetInstance();
-
-		auto view = cl.last_vieworg;
-		Vector forward, right, up;
-		cl.pEngfuncs->pfnAngleVectors(cl.last_viewangles, forward, right, up);
-
-		Vector end_ = view + forward * 8192;
-
-		start[0] = view[0];
-		start[1] = view[1];
-		start[2] = view[2];
-		end[0] = end_[0];
-		end[1] = end_[1];
-		end[2] = end_[2];
 	}
 
 	void DrawDistance(float flTime)
@@ -631,10 +779,10 @@ namespace CustomHud
 		if (CVars::bxt_hud_distance.GetBool())
 		{
 			int x, y;
-			GetPosition(CVars::bxt_hud_distance_offset, CVars::bxt_hud_distance_anchor, &x, &y, -200, (si.iCharHeight * 12) + 3);
+			GetPosition(CVars::bxt_hud_distance_offset, CVars::bxt_hud_distance_anchor, &x, &y, -200, (si.iCharHeight * 13) + 3);
 
 			float view[3], end[3];
-			SetupTraceVectors(view, end);
+			ClientDLL::GetInstance().SetupTraceVectors(view, end);
 
 			const auto tr = ServerDLL::GetInstance().TraceLine(view, end, 0, HwDLL::GetInstance().GetPlayerEdict());
 			double hdist = std::hypot(tr.vecEndPos[0] - view[0], tr.vecEndPos[1] - view[1]);
@@ -659,13 +807,13 @@ namespace CustomHud
 		if (CVars::bxt_hud_entity_info.GetBool())
 		{
 			int x, y;
-			GetPosition(CVars::bxt_hud_entity_info_offset, CVars::bxt_hud_entity_info_anchor, &x, &y, -200, (si.iCharHeight * 16) + 3);
+			GetPosition(CVars::bxt_hud_entity_info_offset, CVars::bxt_hud_entity_info_anchor, &x, &y, -200, (si.iCharHeight * 17) + 3);
 
 			const auto& hw = HwDLL::GetInstance();
 			const auto& sv = ServerDLL::GetInstance();
 
 			float view[3], end[3];
-			SetupTraceVectors(view, end);
+			ClientDLL::GetInstance().SetupTraceVectors(view, end);
 
 			const auto tr = sv.TraceLine(view, end, 0, HwDLL::GetInstance().GetPlayerEdict());
 
@@ -682,15 +830,60 @@ namespace CustomHud
 				const auto index = ent - edicts;
 				out << "Entity: " << index << '\n';
 
-				const char *classname = sv.GetString(ent->v.classname);
+				const char *classname = hw.GetString(ent->v.classname);
 				out << classname << '\n';
 
-				if (ent->v.targetname != 0) {
-					const char *targetname = sv.GetString(ent->v.targetname);
-					out << targetname << '\n';
+				if (ent->v.target != 0) {
+					const char *target = hw.GetString(ent->v.target);
+					out << "Target: " << target << '\n';
 				}
 
-				out << "HP: " << ent->v.health;
+				if (ent->v.targetname != 0) {
+					const char *targetname = hw.GetString(ent->v.targetname);
+					out << "Name: " << targetname << '\n';
+				}
+
+				out << "HP: " << ent->v.health << '\n';
+
+				if (strstr(classname, "func_door") != NULL)
+				{
+					// https://github.com/ValveSoftware/halflife/blob/master/dlls/doors.h#L27-L28
+					if (ent->v.spawnflags & 256)
+						out << "Usable: Yes" << '\n';
+					else
+						out << "Usable: No" << '\n';
+
+					if (ent->v.spawnflags & 512)
+						out << "Monsters: Can't open" << '\n';
+					else
+						out << "Monsters: Can open" << '\n';
+				}
+
+				if ((strstr(classname, "func_door") != NULL) || (!strncmp(classname, "func_rotating", 13)) || (!strncmp(classname, "func_train", 10)))
+					out << "Damage: " << ent->v.dmg << '\n';
+
+				if (CVars::bxt_hud_entity_info.GetInt() >= 2)
+				{
+					out << "Yaw: " << ent->v.angles[1] << '\n';
+
+					Vector origin;
+					HwDLL::GetInstance().GetOriginOfEntity(origin, ent);
+
+					out << "X: " << origin.x << '\n';
+					out << "Y: " << origin.y << '\n';
+					out << "Z: " << origin.z << '\n';
+
+					out << "X Vel: " << ent->v.velocity.x << '\n';
+					out << "Y Vel: " << ent->v.velocity.y << '\n';
+					out << "Z Vel: " << ent->v.velocity.z << '\n';
+
+					out << "Renderfx: " << ent->v.renderfx << '\n';
+
+					if ((ent->v.model != 0) && (CVars::bxt_hud_entity_info.GetInt() == 3)) {
+						const char *model = hw.GetString(ent->v.model);
+						out << "Model: " << model;
+					}
+				}
 			}
 			else
 			{
@@ -706,7 +899,7 @@ namespace CustomHud
 		selfgaussable = false;
 
 		float start[3], end[3];
-		SetupTraceVectors(start, end);
+		ClientDLL::GetInstance().SetupTraceVectors(start, end);
 
 		auto tr = ServerDLL::GetInstance().TraceLine(start, end, 0, HwDLL::GetInstance().GetPlayerEdict());
 
@@ -750,7 +943,7 @@ namespace CustomHud
 		if (CVars::bxt_hud_selfgauss.GetBool())
 		{
 			int x, y;
-			GetPosition(CVars::bxt_hud_selfgauss_offset, CVars::bxt_hud_selfgauss_anchor, &x, &y, -200, (si.iCharHeight * 20) + 3);
+			GetPosition(CVars::bxt_hud_selfgauss_offset, CVars::bxt_hud_selfgauss_anchor, &x, &y, -200, (si.iCharHeight * 34) + 3);
 
 			bool selfgaussable;
 			int hitGroup = 0; // It's always initialized if selfgaussable is set to true, but GCC issues a warning anyway.
@@ -779,7 +972,7 @@ namespace CustomHud
 		if (CVars::bxt_hud_visible_landmarks.GetBool())
 		{
 			int x, y;
-			GetPosition(CVars::bxt_hud_visible_landmarks_offset, CVars::bxt_hud_visible_landmarks_anchor, &x, &y, -20, 0);
+			GetPosition(CVars::bxt_hud_visible_landmarks_offset, CVars::bxt_hud_visible_landmarks_anchor, &x, &y, -75, 0);
 
 			std::ostringstream out;
 			out << "Visible Landmarks:\n";
@@ -796,8 +989,40 @@ namespace CustomHud
 				if (!pentPlayer || !efun->pfnEntOffsetOfPEntity(pentPlayer))
 					continue;
 
-				out << ServerDLL::GetInstance().GetString(pent->v.targetname) << '\n';
+				out << HwDLL::GetInstance().GetString(pent->v.targetname) << '\n';
 			}
+
+			DrawMultilineString(x, y, out.str());
+		}
+	}
+
+	void DrawArmor(float flTime)
+	{
+		if (CVars::bxt_hud_armor.GetBool())
+		{
+			int x, y;
+			GetPosition(CVars::bxt_hud_armor_offset, CVars::bxt_hud_armor_anchor, &x, &y, -200, (si.iCharHeight * 37) + 3);
+
+			std::ostringstream out;
+			out.setf(std::ios::fixed);
+			out.precision(precision);
+			out << "Armor: " << player.armorvalue;
+
+			DrawMultilineString(x, y, out.str());
+		}
+	}
+
+	void DrawWaterlevel(float flTime)
+	{
+		if (CVars::bxt_hud_waterlevel.GetBool())
+		{
+			int x, y;
+			GetPosition(CVars::bxt_hud_waterlevel_offset, CVars::bxt_hud_waterlevel_anchor, &x, &y, -200, (si.iCharHeight * 38) + 3);
+
+			std::ostringstream out;
+			out.setf(std::ios::fixed);
+			out.precision(precision);
+			out << "Waterlevel: " << player.waterlevel;
 
 			DrawMultilineString(x, y, out.str());
 		}
@@ -810,7 +1035,7 @@ namespace CustomHud
 		if (CVars::bxt_hud_nihilanth.GetBool())
 		{
 			int x, y;
-			GetPosition(CVars::bxt_hud_nihilanth_offset, CVars::bxt_hud_nihilanth_anchor, &x, &y, -200, (si.iCharHeight * 23) + 3);
+			GetPosition(CVars::bxt_hud_nihilanth_offset, CVars::bxt_hud_nihilanth_anchor, &x, &y, -200, (si.iCharHeight * 39) + 3);
 
 			std::ostringstream out;
 			out << "Nihilanth:\n";
@@ -839,13 +1064,42 @@ namespace CustomHud
 		}
 	}
 
+	void DrawGonarchInfo(float flTime)
+	{
+		if (CVars::bxt_hud_gonarch.GetBool())
+		{
+			int x, y;
+			GetPosition(CVars::bxt_hud_gonarch_offset, CVars::bxt_hud_gonarch_anchor, &x, &y, -200, (si.iCharHeight * 46) + 3);
+
+			std::ostringstream out;
+			out << "Gonarch:\n";
+
+			float health, frame;
+			int sequence;
+
+			if (ServerDLL::GetInstance().GetGonarchInfo(health, sequence, frame)) {
+				out << "Health: " << health << '\n'
+					<< "Sequence: " << sequence << " (" << std::fixed << std::setprecision(1) << frame << ")\n";
+			}
+			else {
+				out << "Not found";
+			}
+
+			DrawMultilineString(x, y, out.str());
+		}
+	}
+
 	void DrawHealth(float flTime)
 	{
 		if (CVars::bxt_hud_health.GetBool())
 		{
 			int x, y;
 			GetPosition(CVars::bxt_hud_health_offset, CVars::bxt_hud_health_anchor, &x, &y, 0, -4 * NumberHeight);
-			DrawNumber(static_cast<int>(player.health), x, y);
+
+			if (ClientDLL::GetInstance().pEngfuncs->pDemoAPI->IsPlayingback() && CVars::bxt_hud_health_override_in_demo.GetInt() >= 1)
+				DrawNumber(CVars::bxt_hud_health_override_in_demo.GetInt(), x, y);
+			else
+				DrawNumber(static_cast<int>(player.health), x, y);
 		}
 	}
 
@@ -916,7 +1170,15 @@ namespace CustomHud
 			// Some constants.
 			const float aspect_ratio = (float)si.iHeight / (float)si.iWidth;
 
-			const auto fov = std::clamp(CVars::default_fov.GetFloat(), 30.f, 150.f) * M_DEG2RAD;
+			float fov_getfloat;
+			if (CVars::bxt_collision_depth_map_fov.GetFloat() >= 1.0)
+				fov_getfloat = CVars::bxt_collision_depth_map_fov.GetFloat();
+			else if (CVars::bxt_force_fov.GetFloat() >= 1.0)
+				fov_getfloat = CVars::bxt_force_fov.GetFloat();
+			else
+				fov_getfloat = CVars::default_fov.GetFloat();
+
+			const auto fov = std::clamp(fov_getfloat, 30.f, 150.f) * M_DEG2RAD;
 			const auto vfov = 2.f * std::atan(std::tan(fov * 0.5f) * aspect_ratio);
 
 			const float screen_width = max_depth * (float) std::tan(fov * 0.5);
@@ -992,7 +1254,7 @@ namespace CustomHud
 			return;
 
 		int x, y;
-		GetPosition(CVars::bxt_hud_tas_editor_status_offset, CVars::bxt_hud_tas_editor_status_anchor, &x, &y, -250, (si.iCharHeight * 30) + 3);
+		GetPosition(CVars::bxt_hud_tas_editor_status_offset, CVars::bxt_hud_tas_editor_status_anchor, &x, &y, 2, si.iCharHeight + 2);
 
 		std::ostringstream out;
 		out.setf(std::ios::fixed);
@@ -1057,15 +1319,32 @@ namespace CustomHud
 				out << "  " << action.first << '\n';
 			}
 
+			out << "Frametime: " << frame_bulk_status.frametime << '\n';
+
 			if (frame_bulk_status.pitch_present) {
 				out << "Pitch: " << frame_bulk_status.pitch << "\n";
 			}
 			if (frame_bulk_status.yaw_present) {
 				out << "Yaw: " << frame_bulk_status.yaw << "\n";
 			}
+			if (frame_bulk_status.count_present) {
+				out << "Left-right frame count: " << frame_bulk_status.count << "\n";
+			}
 			if (!frame_bulk_status.commands.empty()) {
 				out << "Commands:\n  " << frame_bulk_status.commands << '\n';
 			}
+
+			out << "Camera Yaw: " << frame_bulk_status.realyaw << '\n';
+
+			out << "Vel: " << frame_bulk_status.vel << '\n';
+			out << "Z Vel: " << frame_bulk_status.zvel << '\n';
+
+			out << "X Pos: " << frame_bulk_status.pos[0] << '\n'
+				<< "Y Pos: " << frame_bulk_status.pos[1] << '\n'
+				<< "Z Pos: " << frame_bulk_status.pos[2] << '\n';
+
+			out << "Health: " << frame_bulk_status.health << '\n';
+			out << "Armor: " << frame_bulk_status.armor << '\n';
 		} else {
 			out << " no frame bulk selected";
 		}
@@ -1079,7 +1358,7 @@ namespace CustomHud
 			return;
 
 		int x, y;
-		GetPosition(CVars::bxt_hud_entities_offset, CVars::bxt_hud_entities_anchor, &x, &y, 0, (4 * si.iCharHeight) + 8);
+		GetPosition(CVars::bxt_hud_entities_offset, CVars::bxt_hud_entities_anchor, &x, &y, 2, (si.iCharHeight * 3) + 2);
 
 		const auto max_lines = std::max(1, (si.iHeight - y - si.iCharHeight) / si.iCharHeight);
 		int current_line = 0;
@@ -1087,7 +1366,6 @@ namespace CustomHud
 		std::ostringstream out;
 
 		const auto& hw = HwDLL::GetInstance();
-		const auto& sv = ServerDLL::GetInstance();
 
 		edict_t *edicts;
 		const int numEdicts = hw.GetEdicts(&edicts);
@@ -1096,11 +1374,11 @@ namespace CustomHud
 			if (!hw.IsValidEdict(ent))
 				continue;
 
-			const char *classname = sv.GetString(ent->v.classname);
+			const char *classname = hw.GetString(ent->v.classname);
 			out << e << ": " << classname;
 
 			if (ent->v.targetname != 0) {
-				const char *targetname = sv.GetString(ent->v.targetname);
+				const char *targetname = hw.GetString(ent->v.targetname);
 				out << " - " << targetname;
 			}
 
@@ -1244,6 +1522,143 @@ namespace CustomHud
 		}
 	}
 
+	void DrawStamina(float flTime)
+	{
+		if (CVars::bxt_hud_stamina.GetBool())
+		{
+			int x, y;
+			GetPosition(CVars::bxt_hud_stamina_offset, CVars::bxt_hud_stamina_anchor, &x, &y, -75, si.iCharHeight * 4);
+
+			std::ostringstream out;
+			out.setf(std::ios::fixed);
+			out.precision(precision);
+			out << "Stamina: ";
+
+			if (frame_bulk_selected)
+				out << frame_bulk_status.stamina;
+			else
+				out << player.stamina;
+
+			DrawString(x, y, out.str().c_str());
+		}
+	}
+
+	void DrawSplit(float flTime)
+	{
+		if (!CVars::bxt_hud_split.GetBool())
+			return;
+
+		if (Splits::splits.empty())
+			return;
+		
+		const auto split = Splits::last_reached;
+		if (!split || !split->reached)
+		{
+			// No splits have been touched yet
+			return;
+		}
+		const auto& splitTime = split->time;
+
+		auto fadeoutDuration = CVars::bxt_hud_split_fadeout.GetFloat();
+		const auto duration = CVars::bxt_hud_split_duration.GetFloat();
+		if (duration > 0)
+		{
+			const auto& currentTime = GetTime();
+			const auto splitTimeSeconds = (splitTime.hours * 60 * 60) + (splitTime.minutes * 60) + splitTime.seconds + (static_cast<float>(splitTime.milliseconds) / 1000);
+			const auto currentTimeSeconds = (currentTime.hours * 60 * 60) + (currentTime.minutes * 60) + currentTime.seconds + (static_cast<float>(currentTime.milliseconds) / 1000);
+
+			const auto drawTime = (duration + fadeoutDuration) - (currentTimeSeconds - splitTimeSeconds);
+			if (drawTime < 0)
+			{
+				// Drawing time expired, no more drawing until the next split
+				return;
+			}
+			if (fadeoutDuration > drawTime)
+				fadeoutDuration = drawTime;
+		}
+		else
+		{
+			// Since it's gonna be showing the split time permanently with full alpha, there's no fadeout to care about
+			fadeoutDuration = 0.0;
+		}
+
+		int x, y;
+		const auto distToNormalTimer = NumberHeight + 10;
+		if (CVars::bxt_hud_split_anchor.GetString().empty())
+		{
+			// No anchor specified. Draw it just below the normal timer
+			GetPosition(CVars::bxt_hud_split_offset, CVars::bxt_hud_timer_anchor, &x, &y, 0, distToNormalTimer);
+		}
+		else
+			GetPosition(CVars::bxt_hud_split_offset, CVars::bxt_hud_split_anchor, &x, &y, 0, 0);
+
+		auto r = hudColor[0],
+			 g = hudColor[1],
+			 b = hudColor[2];
+
+		if (fadeoutDuration > 0)
+		{
+			const auto factor = fadeoutDuration / CVars::bxt_hud_split_fadeout.GetFloat();
+			r = static_cast<int>(r * factor);
+			g = static_cast<int>(g * factor);
+			b = static_cast<int>(b * factor);
+		}
+
+		if (splitTime.hours)
+		{
+			x = DrawNumberTimer(splitTime.hours, x, y, r, g, b);
+			DrawColon(x, y);
+			x += NumberWidth;
+		}
+
+		if (splitTime.hours || splitTime.minutes)
+		{
+			int fieldMinWidth = (splitTime.hours && splitTime.minutes < 10) ? 2 : 1;
+			x = DrawNumberTimer(splitTime.minutes, x, y, r, g, b, fieldMinWidth);
+			DrawColon(x, y);
+			x += NumberWidth;
+		}
+
+		int fieldMinWidth = ((splitTime.hours || splitTime.minutes) && splitTime.seconds < 10) ? 2 : 1;
+		x = DrawNumberTimer(splitTime.seconds, x, y, r, g, b, fieldMinWidth);
+
+		DrawDecimalSeparator(x, y, r, g, b);
+		x += NumberWidth;
+
+		DrawNumberTimer(splitTime.milliseconds, x, y, r, g, b, 3);
+		
+		if (CVars::bxt_hud_split_speed.GetBool())
+		{
+			// TODO: create a "bxt_hud_split_speed_below_time" cvar and draw it by default next to the time instead of below?
+			// I'm not drawing it next to the time yet because I would like to put a separator like "|" between time and speed,
+			// and I have to figure out how to draw it nicely, similar to the dot or numbers and not like the text in bxt_hud_origin
+			const auto vecSpeed = split->speed;
+			double speed = 0.0;
+			if (split->track_horizontal_speed)
+			{
+				if (split->track_vertical_speed)
+					speed = vecSpeed.Length();
+				else
+					speed = vecSpeed.Length2D();
+			}
+			else if (split->track_vertical_speed)
+				speed = vecSpeed.z;
+			else
+				return; // I guess they don't want to print the speed for this specific split
+
+			// Draw it below the split time, which can be right below the timer or elsewhere with its own anchor
+			if (CVars::bxt_hud_split_anchor.GetString().empty())
+				GetPosition(CVars::bxt_hud_split_offset, CVars::bxt_hud_timer_anchor, &x, &y, 0, distToNormalTimer + NumberHeight + 4);
+			else
+				GetPosition(CVars::bxt_hud_split_offset, CVars::bxt_hud_split_anchor, &x, &y, 0, NumberHeight);
+
+			DrawNumberTimer(static_cast<int>(trunc(speed)), x, y, r, g, b);
+		}
+
+		// TODO: draw whatever origin components (x,y,z) this split is tracking? might be too much data on screen,
+		// but we could make a cvar for it
+	}
+
 	void Init()
 	{
 		SpriteList = nullptr;
@@ -1322,23 +1737,30 @@ namespace CustomHud
 		UpdateColors();
 		GetAccurateInfo();
 
+		DrawQuickGauss(flTime);
 		DrawHealth(flTime);
+		DrawArmor(flTime);
+		DrawWaterlevel(flTime);
 		DrawVelocity(flTime);
 		DrawOrigin(flTime);
 		DrawViewangles(flTime);
 		DrawSpeedometer(flTime);
 		DrawJumpspeed(flTime);
+		DrawJumpDistance(flTime);
 		DrawTimer(flTime);
 		DrawDistance(flTime);
 		DrawEntityInfo(flTime);
 		DrawSelfgaussInfo(flTime);
 		DrawVisibleLandmarks(flTime);
 		DrawNihilanthInfo(flTime);
+		DrawGonarchInfo(flTime);
 		DrawIncorrectFPSIndicator(flTime);
 		DrawCollisionDepthMap(flTime);
 		DrawTASEditorStatus();
 		DrawEntities(flTime);
 		DrawCrosshair(flTime);
+		DrawStamina(flTime);
+		DrawSplit(flTime);
 
 		receivedAccurateInfo = false;
 		frame_bulk_selected = false;
@@ -1398,6 +1820,7 @@ namespace CustomHud
 	{
 		Interprocess::WriteTimerReset(GetTime());
 		countingTime = false;
+		invalidRun = false;
 		hours = minutes = seconds = 0;
 		timeRemainder = 0.0;
 		frames = 0;
@@ -1410,6 +1833,13 @@ namespace CustomHud
 			Interprocess::WriteTimerStart(GetTime());
 
 		countingTime = counting;
+	}
+
+	void SetInvalidRun(bool invalidated)
+	{
+		// Only set as invalid, if the timer is actually running
+		if (countingTime)
+			invalidRun = invalidated;
 	}
 
 	void SendTimeUpdate() {
@@ -1438,15 +1868,32 @@ namespace CustomHud
 			milliseconds };
 	}
 
+	bool GetCountingTime()
+	{
+		return countingTime;
+	}
+
+	bool GetInvalidRun()
+	{
+		return invalidRun;
+	}
+
 	const SCREENINFO& GetScreenInfo()
 	{
 		return si;
 	}
 
-	void UpdateTASEditorStatus(const HLTAS::Frame& frame_bulk)
+	void UpdateTASEditorStatus(const HLTAS::Frame& frame_bulk, const float& player_vel, const float& player_zvel, const float player_pos[3], const float& player_realyaw, const float& player_health, const float& player_armor, const float& player_stamina)
 	{
 		frame_bulk_selected = true;
 		frame_bulk_status = FrameBulkStatus{};
+
+		frame_bulk_status.vel = player_vel;
+		frame_bulk_status.zvel = player_zvel;
+		frame_bulk_status.pos[0] = player_pos[0];
+		frame_bulk_status.pos[1] = player_pos[1];
+		frame_bulk_status.pos[2] = player_pos[2];
+		frame_bulk_status.realyaw = player_realyaw;
 
 		frame_bulk_status.strafe = frame_bulk.Strafe;
 		if (frame_bulk_status.strafe) {
@@ -1482,11 +1929,23 @@ namespace CustomHud
 			frame_bulk_status.pitch = frame_bulk.GetPitch();
 		}
 
-		frame_bulk_status.yaw_present = frame_bulk.GetYawPresent();
+		frame_bulk_status.yaw_present = frame_bulk.HasYaw();
 		if (frame_bulk_status.yaw_present) {
 			frame_bulk_status.yaw = frame_bulk.GetYaw();
 		}
 
+		frame_bulk_status.count_present = frame_bulk.HasCount();
+		if (frame_bulk_status.count_present) {
+			frame_bulk_status.count = frame_bulk.GetCount();
+		}
+
 		frame_bulk_status.commands = frame_bulk.Commands;
+
+		frame_bulk_status.health = player_health;
+		frame_bulk_status.armor = player_armor;
+
+		frame_bulk_status.stamina = player_stamina;
+
+		frame_bulk_status.frametime = frame_bulk.Frametime;
 	}
 }

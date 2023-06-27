@@ -40,6 +40,8 @@ namespace RuntimeData
 			LOADED_MODULES,
 			CUSTOM_TRIGGER_COMMAND,
 			EDICTS,
+			PLAYERHEALTH,
+			SPLIT_MARKER,
 		};
 
 		// Encrypting filter.
@@ -55,7 +57,7 @@ namespace RuntimeData
 			template<typename Sink>
 			bool put(Sink& dest, char c) {
 				buffer[pos++] = c;
-				
+
 				if (pos == 8) {
 					encrypt();
 
@@ -292,6 +294,25 @@ namespace RuntimeData
 				archive(RuntimeDataType::EDICTS);
 
 				archive(e.edicts);
+			}
+
+			void operator()(const PlayerHealth& p) const {
+				archive(RuntimeDataType::PLAYERHEALTH);
+
+				archive(p.health);
+			}
+
+			void operator()(const SplitMarker& m) const {
+				archive(RuntimeDataType::SPLIT_MARKER);
+
+				archive(m.corner_min.x);
+				archive(m.corner_min.y);
+				archive(m.corner_min.z);
+				archive(m.corner_max.x);
+				archive(m.corner_max.y);
+				archive(m.corner_max.z);
+				archive(m.name);
+				archive(m.map_name);
 			}
 
 		private:

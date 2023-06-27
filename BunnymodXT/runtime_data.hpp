@@ -52,6 +52,17 @@ namespace RuntimeData
 		int edicts;
 	};
 
+	struct PlayerHealth {
+		int health;
+	};
+
+	struct SplitMarker {
+		Vector corner_min;
+		Vector corner_max;
+		std::string name;
+		std::string map_name;
+	};
+
 	using Data = boost::variant<VersionInfo,
 	                            CVarValues,
 	                            Time,
@@ -62,7 +73,9 @@ namespace RuntimeData
 	                            GameEndMarker,
 	                            LoadedModules,
 	                            CustomTriggerCommand,
-	                            Edicts>;
+	                            Edicts,
+	                            PlayerHealth,
+	                            SplitMarker>;
 
 	void Add(Data data);
 	void Clear();

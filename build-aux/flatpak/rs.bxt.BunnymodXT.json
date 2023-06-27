@@ -1,7 +1,7 @@
 {
     "app-id": "rs.bxt.BunnymodXT",
     "runtime": "org.freedesktop.Sdk",
-    "runtime-version": "20.08",
+    "runtime-version": "22.08",
     "command": "/usr/bin/true",
     "sdk": "org.freedesktop.Sdk",
     "sdk-extensions": [
@@ -9,6 +9,7 @@
         "org.freedesktop.Sdk.Extension.toolchain-i386",
         "org.freedesktop.Sdk.Extension.rust-stable"
     ],
+    "finish-args": [],
     "build-options": {
         "append-path": "/usr/lib/sdk/toolchain-i386/bin:/usr/lib/sdk/rust-stable/bin",
         "build-args" : [
@@ -43,6 +44,9 @@
             "name": "BunnymodXT",
             "buildsystem": "cmake-ninja",
             "builddir": true,
+            "config-opts": [
+                "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
+            ],
             "sources": [
                 {
                     "type": "dir",

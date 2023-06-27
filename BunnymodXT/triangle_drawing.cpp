@@ -1,6 +1,8 @@
 #include "stdafx.hpp"
 
 #include "custom_triggers.hpp"
+#include "splits.hpp"
+
 #include "triangle_drawing.hpp"
 #include "triangle_utils.hpp"
 #include "modules.hpp"
@@ -77,8 +79,7 @@ namespace TriangleDrawing
 			return;
 
 		const auto playerOrigin = player->v.origin;
-		Vector forward, right, up;
-		ClientDLL::GetInstance().pEngfuncs->pfnAngleVectors(player->v.v_angle, forward, right, up);
+		auto forward = ClientDLL::GetInstance().AnglesToForward(player->v.v_angle);
 
 		const auto& si = CustomHud::GetScreenInfo();
 		const auto min_resolution = std::min(si.iHeight, si.iWidth);
@@ -161,7 +162,7 @@ namespace TriangleDrawing
 
 	static void DrawTriggers(triangleapi_s *pTriAPI)
 	{
-		if (!CVars::bxt_show_triggers.GetBool() || CVars::bxt_show_triggers_legacy.GetBool())
+		if (!CVars::bxt_show_triggers.GetBool())
 			return;
 
 		pTriAPI->RenderMode(kRenderTransAdd);
@@ -175,8 +176,11 @@ namespace TriangleDrawing
 			if (!HwDLL::GetInstance().IsValidEdict(ent))
 				continue;
 
-			const char *classname = ServerDLL::GetInstance().GetString(ent->v.classname);
-			if (std::strncmp(classname, "trigger_", 8) != 0)
+			const char *classname = HwDLL::GetInstance().GetString(ent->v.classname);
+			bool is_trigger = std::strncmp(classname, "trigger_", 8) == 0;
+			bool is_ladder = std::strncmp(classname, "func_ladder", 11) == 0;
+
+			if (!is_trigger && !is_ladder)
 				continue;
 
 			const model_t *model = HwDLL::GetInstance().GetModelByIndex(ent->v.modelindex);
@@ -189,7 +193,8 @@ namespace TriangleDrawing
 				// Offset to make each surface look slightly different
 				const float offset = i * float(M_PI) / 7;
 				float r, g, b, a;
-				ServerDLL::GetTriggerColor(classname, !active, true, r, g, b, a);
+				ServerDLL::GetTriggerColor(classname, r, g, b);
+				ServerDLL::GetTriggerAlpha(classname, !active, true, a);
 				r /= 255.0f;
 				g /= 255.0f;
 				b /= 255.0f;
@@ -271,19 +276,7 @@ namespace TriangleDrawing
 				continue;
 			}
 
-			const char* classname = server.GetString(ent->v.classname);
-			if (strcmp(classname, "player") == 0) {
-				pTriAPI->RenderMode(kRenderTransColor);
-				pTriAPI->Color4f(0.0f, 1.0f, 0.0f, 1.0f);
-				TriangleUtils::DrawAACuboidWireframe(pTriAPI, ent->v.absmin, ent->v.absmax);
-				if (CVars::bxt_show_pickup_bbox.GetInt() == 2) {
-					pTriAPI->RenderMode(kRenderTransAdd);
-					pTriAPI->Color4f(0.0f, 1.0f, 0.0f, 0.1f);
-					TriangleUtils::DrawAACuboid(pTriAPI, ent->v.absmin, ent->v.absmax);
-				}
-				continue;
-			}
-
+			const char* classname = hw.GetString(ent->v.classname);
 			const auto it = std::find_if(PICKABLE_PREFIX.cbegin(), PICKABLE_PREFIX.cend(), [classname](const std::string& val) {
 				return strncmp(classname, val.c_str(), val.length()) == 0;
 			});
@@ -302,13 +295,223 @@ namespace TriangleDrawing
 		}
 	}
 
+	static void DrawPlayerAbsMinMax(triangleapi_s *pTriAPI)
+	{
+		if (!CVars::bxt_show_player_bbox.GetBool())
+			return;
+
+		pTriAPI->CullFace(TRI_NONE);
+
+		const auto& hw = HwDLL::GetInstance();
+		if (hw.sv_player)
+		{
+			pTriAPI->RenderMode(kRenderTransColor);
+			pTriAPI->Color4f(0.0f, 1.0f, 0.0f, 1.0f);
+			TriangleUtils::DrawAACuboidWireframe(pTriAPI, (*hw.sv_player)->v.absmin, (*hw.sv_player)->v.absmax);
+			if (CVars::bxt_show_player_bbox.GetInt() == 2)
+			{
+				pTriAPI->RenderMode(kRenderTransAdd);
+				pTriAPI->Color4f(0.0f, 1.0f, 0.0f, 0.1f);
+				TriangleUtils::DrawAACuboid(pTriAPI, (*hw.sv_player)->v.absmin, (*hw.sv_player)->v.absmax);
+			}
+		}
+	}
+
+	static void DrawMonsterAbsMinMax(triangleapi_s *pTriAPI)
+	{
+		if (!CVars::bxt_show_monster_bbox.GetBool())
+			return;
+
+		pTriAPI->CullFace(TRI_NONE);
+
+		const auto& hw = HwDLL::GetInstance();
+		const auto& server = ServerDLL::GetInstance();
+		const enginefuncs_t* engfuncs = server.pEngfuncs;
+		if (!engfuncs) {
+			return;
+		}
+
+		edict_t* edicts = nullptr;
+		const int numEdicts = hw.GetEdicts(&edicts);
+		for (int e = 0; e < numEdicts; ++e) {
+			const edict_t* ent = edicts + e;
+			if (!hw.IsValidEdict(ent)) {
+				continue;
+			}
+
+			if (ent->v.flags & FL_MONSTER)
+			{
+				pTriAPI->RenderMode(kRenderTransColor);
+				pTriAPI->Color4f(1.0f, 0.75f, 0.8f, 1.0f);
+				TriangleUtils::DrawAACuboidWireframe(pTriAPI, ent->v.absmin, ent->v.absmax);
+				if (CVars::bxt_show_monster_bbox.GetInt() == 2) {
+					pTriAPI->RenderMode(kRenderTransAdd);
+					pTriAPI->Color4f(1.0f, 0.75f, 0.8f, 0.1f);
+					TriangleUtils::DrawAACuboid(pTriAPI, ent->v.absmin, ent->v.absmax);
+				}
+			}
+		}
+	}
+
+	static void DrawBullets(triangleapi_s* pTriAPI, const std::deque<std::array<Vector, 2>>& points_vec, const std::deque<bool>& hit_vec, byte r, byte g, byte b)
+	{
+		byte rEnd = 255 - r, gEnd = 255 - g, bEnd = 255 - b;
+
+		float r_float = r / 255.0f, g_float = g / 255.0f, b_float = b / 255.0f;
+		float rEnd_float = rEnd / 255.0f, gEnd_float = gEnd / 255.0f, bEnd_float = bEnd / 255.0f;
+
+		for (size_t i = 0; i < points_vec.size(); i++)
+		{
+			const auto points = points_vec.at(i);
+			const auto hit = hit_vec.at(i);
+			
+			float hitAlpha = 0.3f;
+			if (hit)
+				hitAlpha = 1.0f;
+
+			float lastHalfDist = 20.0f;
+			float totalLenMin = 60.0f;
+			auto diff = points[1] - points[0];
+			auto diffLen = diff.Length();
+			Vector half;
+			if (diffLen < totalLenMin) {
+				auto diffFirstHalf = diff * 0.7f;
+				half = points[0] + diffFirstHalf;
+			}
+			else {
+				auto diffFirstHalf = diff - diff.Normalize() * lastHalfDist;
+				half = points[0] + diffFirstHalf;
+			}
+			
+			pTriAPI->Color4f(r_float, g_float, b_float, hitAlpha);
+			TriangleUtils::DrawLine(pTriAPI, points[0], half);
+			pTriAPI->Color4f(rEnd_float, gEnd_float, bEnd_float, hitAlpha);
+			TriangleUtils::DrawLine(pTriAPI, half, points[1]);
+		}
+	}
+
+	static void DrawBulletsEnemyTrace(triangleapi_s* pTriAPI)
+	{
+		if (!CVars::bxt_show_bullets_enemy.GetBool())
+			return;
+
+		const auto points_vec = ServerDLL::GetInstance().GetBulletsEnemyTrace();
+		const auto hit_vec = ServerDLL::GetInstance().GetBulletsEnemyTraceHit();
+
+		DrawBullets(pTriAPI, points_vec, hit_vec, 255, 0, 144);
+	}
+
+	static void DrawBulletsPlayerTrace(triangleapi_s* pTriAPI)
+	{
+		if (!CVars::bxt_show_bullets.GetBool())
+			return;
+
+		const auto points_vec = ServerDLL::GetInstance().GetBulletsPlayerTrace();
+		const auto hit_vec = ServerDLL::GetInstance().GetBulletsPlayerTraceHit();
+
+		DrawBullets(pTriAPI, points_vec, hit_vec, 0, 200, 255);
+	}
+
+	static void DrawSplits(triangleapi_s *pTriAPI)
+	{
+		if (!CVars::bxt_show_splits.GetBool())
+			return;
+
+		pTriAPI->CullFace(TRI_NONE);
+
+		for (const auto& split : Splits::splits) {
+			if (!split.map_name.empty() && split.map_name != HwDLL::GetInstance().lastLoadedMap)
+			{
+				// Discard splits that are not scoped to the current map
+				continue;
+			}
+
+			auto corner_positions = split.get_corner_positions();
+
+			pTriAPI->RenderMode(kRenderTransAdd);
+
+			if (!CVars::bxt_splits_color.IsEmpty()) {
+				unsigned r = 0, g = 0, b = 0, a = 0;
+				std::istringstream ss(CVars::bxt_splits_color.GetString());
+				ss >> r >> g >> b >> a;
+
+				static float triggerColor[4];
+				triggerColor[0] = r / 255.0f;
+				triggerColor[1] = g / 255.0f;
+				triggerColor[2] = b / 255.0f;
+				triggerColor[3] = a / 255.0f;
+
+				pTriAPI->Color4f(triggerColor[0], triggerColor[1], triggerColor[2], triggerColor[3]);
+			} else {
+				pTriAPI->Color4f(0.8f, 0.6f, 0.3f, 0.3f);
+			}
+
+			TriangleUtils::DrawAACuboid(pTriAPI, corner_positions.first, corner_positions.second);
+
+			pTriAPI->RenderMode(kRenderTransColor);
+			pTriAPI->Color4f(0.5f, 0.3f, 0.0f, 1.0f);
+			TriangleUtils::DrawAACuboidWireframe(pTriAPI, corner_positions.first, corner_positions.second);
+		}
+	}
+
+	static Vector perpendicular(const Vector &prev, const Vector &next) {
+		Vector perpendicular;
+
+		auto line = (next - prev).Normalize();
+		if (line.x == 0 && line.y == 0)
+			perpendicular = Vector(1, 0, 0);
+		else if (line.x == 0)
+			perpendicular = Vector(1, 0, 0);
+		else if (line.y == 0)
+			perpendicular = Vector(0, 1, 0);
+		else
+			perpendicular = Vector(1, -line.x / line.y, 0).Normalize();
+
+		// Make sure it's oriented in a particular way: this makes right-drag to change
+		// yaw behave as expected (the yaw will change in the direction where you move
+		// the mouse).
+		if (perpendicular.x * line.y - perpendicular.y * line.x > 0) {
+			perpendicular.x = -perpendicular.x;
+			perpendicular.y = -perpendicular.y;
+		}
+
+		return perpendicular;
+	}
+
+	enum KeyFrameType {
+		FRAME_BULK,
+		CHANGE_END,
+	};
+
+	struct KeyFrame {
+		KeyFrameType type;
+		// For CHANGE_END this is the change line.
+		size_t frame_bulk_index;
+		size_t frame;
+		// For change start this is the end, for change end this is the start.
+		// If 0, it is invalid.
+		size_t other_frame;
+	};
+
+	struct Selection {
+		KeyFrameType type;
+		// 0 means nothing is selected.
+		size_t frame_bulk_index;
+		size_t initial_frame;
+		size_t last_frame;
+		// For change start this is the end, for change end this is the start.
+		// If 0, it is invalid.
+		size_t other_frame;
+	};
+
 	static void DrawTASEditor(triangleapi_s *pTriAPI)
 	{
 		using HLStrafe::HullType;
 		using HLTAS::StrafeDir;
 		using HLTAS::StrafeType;
 		using std::vector;
-		const double M_RAD2DEG = 180 / M_PI;
+		using std::pair;
+		using std::make_pair;
 		const double M_DEG2RAD = M_PI / 180;
 
 		auto& hw = HwDLL::GetInstance();
@@ -352,10 +555,13 @@ namespace TriangleDrawing
 		static Vector2D right_pressed_at = Vector2D(0, 0);
 		auto right_pressed = (mouse_state & SDL_BUTTON(SDL_BUTTON_RIGHT)) != 0;
 		bool right_got_pressed = false;
+		bool right_got_released = false;
 		if (right_pressed && !right_was_pressed) {
 			right_got_pressed = true;
 			right_pressed_at = mouse;
 		}
+		if (!right_pressed && right_was_pressed)
+			right_got_released = true;
 		right_was_pressed = right_pressed;
 
 		static bool mouse4_was_pressed = false;
@@ -378,13 +584,7 @@ namespace TriangleDrawing
 			adjustment_speed /= 20;
 
 		auto view = cl.last_vieworg;
-		Vector forward, right, up;
-		cl.pEngfuncs->pfnAngleVectors(cl.last_viewangles, forward, right, up);
-
-		// Trace to find the world point we're interested in.
-		Vector end = view + forward * 8192;
-		auto tr = hw.PlayerTrace(view, end, HullType::POINT, true);
-		Vector mouse_world(tr.EndPos);
+		auto forward = cl.AnglesToForward(cl.last_viewangles);
 
 		auto& input = hw.tas_editor_input;
 		const auto& player_datas = input.player_datas;
@@ -392,123 +592,951 @@ namespace TriangleDrawing
 		const auto& normalzs = input.normalzs;
 		const auto& frame_bulk_starts = input.frame_bulk_starts;
 
-		input.simulate(SimulateFrameBulks::ALL_EXCEPT_LAST);
+		const auto show_only_last_frames = CVars::bxt_tas_editor_show_only_last_frames.GetInt();
+		unsigned start_frame = 1;
+		if (show_only_last_frames > 0 && (unsigned) show_only_last_frames < input.player_datas.size()) {
+			start_frame = input.player_datas.size() - show_only_last_frames;
+		}
 
-		if (hw.tas_editor_mode == TASEditorMode::APPEND) {
-			auto last_frame_bulk_index = input.frame_bulks.size() - 1;
-			auto& last_frame_bulk = input.frame_bulks[last_frame_bulk_index];
+		if (input.frame_bulks.size() == 0)
+			return;
 
-			float distance_from_mouse = 0;
-			auto last_frame_bulk_start = player_datas.size() - 1;
+		input.simulate();
 
-			if (input.simulated_until_last_frame_bulk()) {
-				last_frame_bulk_start = input.frame_bulk_starts[last_frame_bulk_index];
-				auto last_frame_bulk_origin = Vector(player_datas[last_frame_bulk_start].Origin);
-				distance_from_mouse = (mouse_world - last_frame_bulk_origin).Length2D();
+		size_t stale_index = std::numeric_limits<size_t>::max();
 
-				auto dir = mouse_world - last_frame_bulk_origin;
-				auto yaw = atan2(dir.y, dir.x) * M_RAD2DEG;
+		if (CVars::bxt_tas_editor_camera_editor.GetBool()) {
+			// Find the regions where global smoothing can start and stop.
+			const auto apply_smoothing_over_s = CVars::bxt_tas_editor_apply_smoothing_over_s.GetFloat();
+			float last_yaw = player_datas[0].Viewangles[1];
+			float same_yaw_duration = input.frametimes[0];
+			size_t same_yaw_started_at = 0;
+			vector<pair<size_t, size_t>> large_enough_same_yaw_regions; // start and one-past-the-end frame
+			for (size_t frame = 1; frame < player_datas.size(); ++frame) {
+				const auto yaw = player_datas[frame].Viewangles[1];
+				const auto time = input.frametimes[frame];
 
-				// Strafe towards the yaw.
-				if (!last_frame_bulk.GetYawPresent() || last_frame_bulk.GetYaw() != yaw) {
-					last_frame_bulk.SetYaw(yaw);
-					input.mark_as_stale(last_frame_bulk_index);
+				if (yaw != last_yaw) {
+					if (same_yaw_duration >= apply_smoothing_over_s)
+						large_enough_same_yaw_regions.emplace_back(same_yaw_started_at, frame);
+
+					last_yaw = yaw;
+					same_yaw_duration = time;
+					same_yaw_started_at = frame;
+					continue;
 				}
 
-				input.simulate(SimulateFrameBulks::ALL);
+				same_yaw_duration += time;
 			}
 
-			size_t frame_limit = player_datas.size() - 1;
-			size_t frames_until_mouse = frame_limit;
-			size_t frames_until_non_ground_collision = frame_limit;
-			size_t next_frame_bulk_start_index = 1;
+			if (same_yaw_duration >= apply_smoothing_over_s)
+				large_enough_same_yaw_regions.emplace_back(same_yaw_started_at, player_datas.size());
 
-			// frame_bulk_starts always contains at least 1 element (zero), in which case we don't
-			// want to access it with next_frame_bulk_start_index. Fortunately, frame is never zero,
-			// so if we set this to 0 this will disable the code below that we want to disable.
-			if (input.frame_bulk_starts.size() == 1)
-				next_frame_bulk_start_index = 0;
+			vector<KeyFrame> key_frames;
 
-			// Draw the positions.
-			pTriAPI->RenderMode(kRenderTransColor);
-			pTriAPI->Color4f(0, 1, 0, 1);
-			TriangleUtils::DrawPyramid(pTriAPI, mouse_world, 10, 20);
+			// Find the key frames.
+			for (size_t i = 0; i < frame_bulk_starts.size() - 1; ++i) {
+				auto& line = input.frame_bulks[i];
 
-			pTriAPI->Color4f(0.8f, 0.8f, 0.8f, 1);
-			for (size_t frame = 1; frame < player_datas.size(); ++frame) {
-				const auto origin = Vector(player_datas[frame].Origin);
+				const auto frame = frame_bulk_starts[i];
 
-				if (frame > last_frame_bulk_start) {
-					auto new_distance_from_mouse = (mouse_world - origin).Length2D();
-					if (frames_until_mouse == frame_limit && new_distance_from_mouse > distance_from_mouse)
-						frames_until_mouse = frame;
-					distance_from_mouse = new_distance_from_mouse;
+				// We want the previous position to compute the perpendicular.
+				if (frame == 0)
+					continue;
 
-					// If we bumped into something along the way
-					if (frames_until_non_ground_collision == frame_limit && fractions[frame] != 1) {
-						auto n = normalzs[frame];
-						// And it wasn't a ground or a ceiling
-						if (n < 0.7 && n != -1)
-							frames_until_non_ground_collision = frame;
+				// We want the next player data to get next angles and position.
+				if (frame + 1 >= player_datas.size())
+					continue;
+
+				if (line.AlgorithmParametersPresent || !line.TargetYawOverride.empty()) {
+					key_frames.emplace_back(KeyFrame { KeyFrameType::FRAME_BULK, i, frame, frame });
+				} else if (line.ChangePresent) {
+					key_frames.emplace_back(KeyFrame{KeyFrameType::FRAME_BULK, i, frame, 0});
+
+					// Find the end of the change.
+					auto time_left = line.GetChangeOver();
+					size_t next_frame = frame;
+					for (size_t j = i + 1; j < input.frame_bulks.size(); j++) {
+						if (next_frame + 1 >= player_datas.size())
+							break;
+
+						const auto& next_line = input.frame_bulks[j];
+						if (!next_line.IsMovement())
+							continue;
+
+						const auto host_frametime = std::strtof(next_line.Frametime.c_str(), nullptr);
+						const auto frametime = static_cast<float>(static_cast<float>(std::floor(host_frametime * 1000)) * 0.001);
+
+						for (size_t repeat = 0; repeat < next_line.GetRepeats(); repeat++) {
+							if (next_frame + 1 >= player_datas.size())
+								break;
+
+							auto time = frametime;
+							if (input.next_frame_is_0mss[next_frame])
+								time = 0;
+
+							next_frame++;
+
+							time_left -= time;
+							if (time_left <= 0)
+								break;
+						}
+
+						if (time_left <= 0)
+							break;
 					}
 
-					if (frame > frames_until_non_ground_collision) {
-						if (frame > frames_until_mouse)
-							pTriAPI->Color4f(1, 0, 0, 1);
-						else
-							pTriAPI->Color4f(1, 0.5, 0, 1);
-					} else {
-						if (frame > frames_until_mouse)
-							pTriAPI->Color4f(0, 1, 1, 1);
-						else
-							pTriAPI->Color4f(0, 1, 0, 1);
+					// We want the next player data to get next angles and position.
+					if (time_left <= 0 && next_frame + 1 < player_datas.size()) {
+						key_frames.back().other_frame = next_frame;
+						key_frames.emplace_back(KeyFrame{KeyFrameType::CHANGE_END, i, next_frame, frame});
 					}
 				}
+			}
+
+			// Find the closest key frame.
+			static Selection selection { KeyFrameType::FRAME_BULK, 0, 0, 0, 0 };
+
+			if (left_pressed || middle_pressed || right_pressed || mouse4_pressed || hw.tas_editor_insert_point_held) {
+				// Don't change the selected frame bulk while dragging.
+			} else {
+				selection.frame_bulk_index = 0;
+
+				float selected_px_dist = INFINITY;
+				for (const auto& key_frame : key_frames) {
+					if (key_frame.frame < start_frame)
+						continue;
+
+					const auto origin = Vector(player_datas[key_frame.frame].Origin);
+					auto disp = origin - view;
+					if (DotProduct(forward, disp) > 0) {
+						Vector origin_ = origin;
+						Vector screen_point;
+						pTriAPI->WorldToScreen(origin_, screen_point);
+						auto screen_point_px = stw_to_pixels(screen_point.Make2D());
+						auto dist = (screen_point_px - mouse).Length();
+
+						if (dist < selected_px_dist) {
+							selected_px_dist = dist;
+							selection.type = key_frame.type;
+							selection.frame_bulk_index = key_frame.frame_bulk_index;
+							selection.initial_frame = key_frame.frame;
+							selection.last_frame = key_frame.frame;
+							selection.other_frame = key_frame.other_frame;
+						}
+					}
+				}
+			}
+
+			auto smoothing_region_it = large_enough_same_yaw_regions.cbegin();
+
+			// Draw the camera angles.
+			for (size_t frame = start_frame; frame < player_datas.size(); ++frame) {
+				const auto origin = Vector(player_datas[frame].Origin);
+
+				float brightness = 0.4f;
+				if (frame >= input.first_predicted_frame && input.received_data_from_second_game)
+					brightness = 0.2f;
+
+				pTriAPI->Color4f(brightness, brightness, 1, 1);
+
+				if (smoothing_region_it != large_enough_same_yaw_regions.cend()) {
+					if (frame >= smoothing_region_it->first) {
+						if (frame < smoothing_region_it->second)
+							pTriAPI->Color4f(0, brightness / 0.4f, 0, 1);
+						else
+							smoothing_region_it++;
+					}
+				}
+
+				auto forward = cl.AnglesToForward(player_datas[frame].Viewangles);
+				TriangleUtils::DrawLine(pTriAPI, origin, origin + forward * 5);
+			}
+
+			size_t closest_frame = 0;
+			float closest_frame_px_dist = INFINITY;
+
+			// Draw the path.
+			for (size_t frame = start_frame; frame < player_datas.size(); ++frame) {
+				const auto origin = Vector(player_datas[frame].Origin);
+
+				float brightness;
+				if (frame >= input.first_predicted_frame && input.received_data_from_second_game)
+					brightness = 0.5f;
+				else
+					brightness = 0.8f;
+
+				// Brighten up the area covered by selection.
+				if (selection.frame_bulk_index > 0 && selection.other_frame != 0 &&
+						// TODO: Dragging changes last_frame in a way not compatible with this check.
+						!left_pressed &&
+						frame > std::min(selection.last_frame, selection.other_frame) &&
+						frame <= std::max(selection.last_frame, selection.other_frame))
+					brightness = 1;
+
+				pTriAPI->Color4f(brightness, brightness, brightness, 1);
 
 				const auto prev_origin = Vector(player_datas[frame - 1].Origin);
 				TriangleUtils::DrawLine(pTriAPI, prev_origin, origin);
 
-				// Draw a small perpendicular line between frame bulks.
-				if (frame == frame_bulk_starts[next_frame_bulk_start_index]) {
-					if (next_frame_bulk_start_index + 1 != frame_bulk_starts.size())
-						++next_frame_bulk_start_index;
+				// If we want to insert or apply smoothing, we need to find the closest frame.
+				if (hw.tas_editor_insert_point_held || hw.tas_editor_apply_smoothing) {
+					auto disp = origin - view;
+					if (DotProduct(forward, disp) > 0) {
+						Vector origin_ = origin;
+						Vector screen_point;
+						pTriAPI->WorldToScreen(origin_, screen_point);
+						auto screen_point_px = stw_to_pixels(screen_point.Make2D());
+						auto dist = (screen_point_px - mouse).Length();
 
-					auto line = (origin - prev_origin).Normalize();
-
-					Vector perpendicular;
-					if (line.x == 0 && line.y == 0)
-						perpendicular = Vector(1, 0, 0);
-					else if (line.x == 0)
-						perpendicular = Vector(1, 0, 0);
-					else if (line.y == 0)
-						perpendicular = Vector(0, 1, 0);
-					else
-						perpendicular = Vector(1, -line.x / line.y, 0).Normalize();
-
-					perpendicular *= 5;
-					Vector a = origin + perpendicular, b = origin - perpendicular;
-					TriangleUtils::DrawLine(pTriAPI, a, b);
+						if (dist < closest_frame_px_dist) {
+							closest_frame = frame;
+							closest_frame_px_dist = dist;
+						}
+					}
 				}
 			}
 
-			if (left_got_pressed) {
-				auto new_frame_bulk = last_frame_bulk;
-				input.set_repeats(last_frame_bulk_index, frames_until_mouse - last_frame_bulk_start);
-				input.frame_bulks.push_back(new_frame_bulk);
-			} else if (frames_until_mouse != frame_limit || input.simulated_all_frames()) {
-				auto host_frametime = std::strtof(last_frame_bulk.Frametime.c_str(), nullptr);
-				auto frametime = static_cast<float>(static_cast<float>(std::floor(host_frametime * 1000)) * 0.001);
-				auto frames_past_mouse = static_cast<unsigned>(1. / frametime); // Simulate 1 second past mouse.
-				auto repeats = frames_until_mouse - last_frame_bulk_start + frames_past_mouse;
-				input.set_repeats(last_frame_bulk_index, repeats);
+			// Draw the key frames.
+			for (const auto& item : key_frames) {
+				const auto frame = item.frame;
+				const auto& line = input.frame_bulks[item.frame_bulk_index];
+
+				if (frame < start_frame)
+					continue;
+
+				if (item.frame_bulk_index == selection.frame_bulk_index && item.frame == selection.last_frame)
+					pTriAPI->Color4f(1, 1, 1, 1);
+				else
+					pTriAPI->Color4f(0.8f, 0.8f, 0.8f, 1);
+
+				Vector prev_origin = player_datas[frame - 1].Origin;
+				Vector origin = player_datas[frame].Origin;
+				Vector next_origin = player_datas[frame + 1].Origin;
+
+				auto perp = perpendicular(prev_origin, origin);
+				perp *= 5;
+				Vector a = origin - perp, b = origin + perp;
+
+				if (line.AlgorithmParametersPresent) {
+					TriangleUtils::DrawLine(pTriAPI, a, b);
+
+					switch (line.GetAlgorithmParameters().Type) {
+						case HLTAS::ConstraintsType::VELOCITY:
+						case HLTAS::ConstraintsType::VELOCITY_AVG:
+						case HLTAS::ConstraintsType::VELOCITY_LOCK:
+							pTriAPI->Color4f(0, 1, 0, 1);
+							break;
+						case HLTAS::ConstraintsType::YAW:
+						case HLTAS::ConstraintsType::YAW_RANGE:
+							pTriAPI->Color4f(0, 1, 1, 1);
+							break;
+						case HLTAS::ConstraintsType::LOOK_AT:
+							pTriAPI->Color4f(1, 0, 1, 1);
+							break;
+					}
+
+					Vector next_angles = player_datas[frame + 1].Viewangles;
+					next_angles[0] = 0;
+					next_angles[2] = 0;
+					auto forward = cl.AnglesToForward(next_angles);
+					TriangleUtils::DrawLine(pTriAPI, origin, origin + forward * 20);
+				} else if (!line.TargetYawOverride.empty()) {
+					pTriAPI->Color4f(1, 1, 0, 1);
+					TriangleUtils::DrawLine(pTriAPI, a, b);
+				} else if (line.ChangePresent) {
+					if (item.type == KeyFrameType::FRAME_BULK) {
+						// Draw an arrow head facing back to mark the start of the change.
+						auto diff = (next_origin - origin).Normalize() * 5;
+						TriangleUtils::DrawLine(pTriAPI, a + diff, origin);
+						TriangleUtils::DrawLine(pTriAPI, origin, b + diff);
+
+						Vector next_angles = player_datas[frame + 1].Viewangles;
+						next_angles[2] = 0;
+						switch (line.GetChangeTarget()) {
+							case HLTAS::ChangeTarget::YAW:
+							case HLTAS::ChangeTarget::TARGET_YAW:
+							case HLTAS::ChangeTarget::TARGET_YAW_OFFSET:
+								next_angles[0] = 0;
+								break;
+							default:
+								break;
+						}
+
+						auto forward = cl.AnglesToForward(next_angles);
+						pTriAPI->Color4f(1, 0, 0, 1);
+						TriangleUtils::DrawLine(pTriAPI, origin, origin + forward * 20);
+					} else {
+						// Draw an arrow head facing forward to mark the end of the change.
+						auto diff = (prev_origin - origin).Normalize() * 5;
+						TriangleUtils::DrawLine(pTriAPI, a + diff, origin);
+						TriangleUtils::DrawLine(pTriAPI, origin, b + diff);
+
+						Vector angles = player_datas[frame].Viewangles;
+						angles[2] = 0;
+						switch (line.GetChangeTarget()) {
+							case HLTAS::ChangeTarget::YAW:
+							case HLTAS::ChangeTarget::TARGET_YAW:
+							case HLTAS::ChangeTarget::TARGET_YAW_OFFSET:
+								angles[0] = 0;
+								angles[1] = line.GetChangeFinalValue();
+								break;
+							case HLTAS::ChangeTarget::PITCH:
+								angles[0] = line.GetChangeFinalValue();
+								break;
+						}
+
+						auto forward = cl.AnglesToForward(angles);
+						pTriAPI->Color4f(1, 1, 0, 1);
+						TriangleUtils::DrawLine(pTriAPI, origin, origin + forward * 20);
+					}
+				}
+			}
+
+			static Vector2D saved_lmb_diff;
+
+			// Compute vectors we'll use for reference when computing the drag adjustment.
+			if (selection.frame_bulk_index > 0 && left_got_pressed) {
+				if (selection.initial_frame > 0 && selection.initial_frame < player_datas.size()) {
+					const auto& player = player_datas[selection.initial_frame];
+					const auto& prev_player = player_datas[selection.initial_frame - 1];
+
+					Vector origin_ = player.Origin;
+					Vector screen_point;
+					pTriAPI->WorldToScreen(origin_, screen_point);
+					auto screen_point_px = stw_to_pixels(screen_point.Make2D());
+					Vector prev_origin_ = prev_player.Origin;
+					Vector prev_screen_point;
+					pTriAPI->WorldToScreen(prev_origin_, prev_screen_point);
+					auto prev_screen_point_px = stw_to_pixels(prev_screen_point.Make2D());
+					saved_lmb_diff = (screen_point_px - prev_screen_point_px).Normalize();
+				} else {
+					// If we can't get the vectors, reset the selection.
+					// This shouldn't happen.
+					selection.frame_bulk_index = 0;
+					hw.ORIG_Con_Printf("Invalid selection frame? This is a bug, please report it.\n");
+				}
+			}
+
+			if (selection.frame_bulk_index > 0 && (left_pressed || (hw.tas_editor_insert_point_held && !hw.tas_editor_insert_point && selection.initial_frame < player_datas.size()))) {
+				auto mouse_diff = mouse - left_pressed_at;
+
+				auto amount = DotProduct(mouse_diff, saved_lmb_diff) * 0.1f * adjustment_speed;
+				const auto new_frame = static_cast<size_t>(std::max(1, static_cast<int>(selection.initial_frame) + static_cast<int>(amount)));
+
+				if (hw.tas_editor_insert_point_held) {
+					auto& frame_bulk = input.frame_bulks[selection.frame_bulk_index];
+
+					// If we're insert-dragging and mouse is at the initial frame, change back to target_yaw velocity_lock frame.
+					if (new_frame == selection.initial_frame && frame_bulk.ChangePresent) {
+						frame_bulk.ChangePresent = false;
+						auto parameters = HLTAS::AlgorithmParameters {};
+						parameters.Type = HLTAS::ConstraintsType::VELOCITY_LOCK;
+						parameters.Parameters.VelocityLock.Constraints = 0;
+						frame_bulk.SetAlgorithmParameters(parameters);
+						selection.type = KeyFrameType::FRAME_BULK;
+					}
+
+					// If we're insert-dragging and mouse left initial frame, change to change frame.
+					if (new_frame != selection.initial_frame) {
+						if (frame_bulk.AlgorithmParametersPresent) {
+							frame_bulk.AlgorithmParametersPresent = false;
+							frame_bulk.ChangePresent = true;
+							frame_bulk.SetChangeTarget(HLTAS::ChangeTarget::TARGET_YAW);
+							frame_bulk.SetChangeOver(0); // Will be adjusted by the code below.
+
+							// It would make more sense to set the value to new_frame when new_frame is after initial_frame,
+							// but at this point viewangles at new_frame are already recomputed with this change,
+							// so they are effectively equal to initial_frame viewangles...
+							frame_bulk.SetChangeFinalValue(player_datas[selection.initial_frame].Viewangles[1]);
+						}
+
+						if (new_frame < selection.initial_frame) {
+							selection.type = KeyFrameType::FRAME_BULK;
+						} else {
+							selection.type = KeyFrameType::CHANGE_END;
+						}
+					}
+				}
+
+				// Figure out, before or in the middle of which frame bulk the line will go.
+				auto split_at = new_frame;
+				size_t i;
+				for (i = 0; i < input.frame_bulks.size(); ++i) {
+					if (!input.frame_bulks[i].IsMovement())
+						continue;
+
+					if (split_at < input.frame_bulks[i].GetRepeats())
+						break;
+
+					split_at -= input.frame_bulks[i].GetRepeats();
+				}
+
+				// Second condition is for doing nothing when the place won't change.
+				// + 1 since we always move to one before a movement frame bulk.
+				if (i < input.frame_bulks.size() && !(split_at == 0 && i == selection.frame_bulk_index + 1)) {
+					// Figure out how much time is between new and last frame.
+					float time_delta = 0;
+					if (input.frame_bulks[selection.frame_bulk_index].ChangePresent) {
+						auto lo = std::min(new_frame, selection.last_frame);
+						auto hi = std::max(new_frame, selection.last_frame);
+
+						if (hi < player_datas.size()) {
+							for (size_t j = lo + 1; j <= hi; j++)
+								time_delta += input.frametimes[j];
+						}
+
+						// If we're moving the start forward or the end back, we need to reduce the time delta.
+						if ((new_frame > selection.last_frame) == (selection.type == FRAME_BULK))
+							time_delta *= -1;
+					}
+
+					// If this is a change line, we need a time delta to adjust it.
+					if (!(input.frame_bulks[selection.frame_bulk_index].ChangePresent && time_delta == 0)) {
+						// Adjust the time according to the delta.
+						if (input.frame_bulks[selection.frame_bulk_index].ChangePresent) {
+							const auto old_time = input.frame_bulks[selection.frame_bulk_index].GetChangeOver();
+							// TODO: better to prevent dragging one point past another altogether.
+							const auto new_time = std::max(0.f, old_time + time_delta);
+							input.frame_bulks[selection.frame_bulk_index].SetChangeOver(new_time);
+						}
+
+						selection.last_frame = new_frame;
+
+						if (selection.type == CHANGE_END) {
+							// No need to move the frame bulk in this case, just mark it as stale.
+							stale_index = selection.frame_bulk_index;
+						} else {
+							// Move the actual frame bulk.
+							auto frame_bulk = input.frame_bulks[selection.frame_bulk_index];
+							input.frame_bulks.erase(input.frame_bulks.begin() + selection.frame_bulk_index);
+
+							if (i > selection.frame_bulk_index) {
+								// Adjust i if we erased before it.
+								i--;
+								stale_index = selection.frame_bulk_index;
+							} else {
+								stale_index = i;
+							}
+
+							// Join back two frame bulks we just connected together if they are the same.
+							{
+								auto& prev = input.frame_bulks[selection.frame_bulk_index - 1];
+								auto& next = input.frame_bulks[selection.frame_bulk_index];
+								if (prev.IsMovement() && next.IsMovement() && next.Comments.empty()) {
+									const auto temp = next.GetRepeats();
+									next.SetRepeats(prev.GetRepeats());
+									next.Comments = prev.Comments;
+									const auto equal = prev.IsEqualToMovementFrame(next);
+									next.Comments.clear();
+									next.SetRepeats(temp);
+
+									if (equal) {
+										// If next was the selected frame bulk, adjust split_at accordingly.
+										if (i == selection.frame_bulk_index)
+											split_at += prev.GetRepeats();
+
+										prev.SetRepeats(prev.GetRepeats() + next.GetRepeats());
+										input.frame_bulks.erase(input.frame_bulks.begin() + selection.frame_bulk_index);
+										stale_index = std::min(stale_index, selection.frame_bulk_index - 1);
+
+										if (i >= selection.frame_bulk_index) {
+											// Adjust i if we erased before it.
+											i--;
+										}
+									}
+								}
+							}
+
+							if (split_at == 0) {
+								// Move it to before the frame bulk.
+								input.frame_bulks.insert(input.frame_bulks.begin() + i, frame_bulk);
+								selection.frame_bulk_index = i;
+							} else {
+								// Split the frame bulk in two and insert in the middle.
+								auto new_frame_bulk_repeats = input.frame_bulks[i].GetRepeats() - split_at;
+								input.set_repeats(i, split_at);
+								auto new_frame_bulk = input.frame_bulks[i];
+								new_frame_bulk.Commands.clear(); // So pause;bxt_tas_editor 1 doesn't copy over.
+								new_frame_bulk.Comments.clear();
+								new_frame_bulk.SetRepeats(new_frame_bulk_repeats);
+								input.frame_bulks.insert(input.frame_bulks.begin() + i + 1, new_frame_bulk);
+
+								// Insert our frame bulk in the middle.
+								input.frame_bulks.insert(input.frame_bulks.begin() + i + 1, frame_bulk);
+								selection.frame_bulk_index = i + 1;
+							}
+						}
+					}
+				}
+			}
+
+			static Vector origin_before_rmb_adjustment;
+			static Vector angles_before_rmb_adjustment;
+			static size_t other_frame_bulk_index;
+
+			if (selection.frame_bulk_index > 0 && right_got_pressed) {
+				auto& frame_bulk = input.frame_bulks[selection.frame_bulk_index];
+
+				if (frame_bulk.ChangePresent && selection.type == KeyFrameType::CHANGE_END && selection.initial_frame < player_datas.size()) {
+					const auto target = frame_bulk.GetChangeTarget();
+
+					// If we're adjusting a change of yaw or pitch, try to find a pitch or yaw change on the same frame
+					// to adjust them simultaneously.
+					const auto it = std::find_if(key_frames.begin(), key_frames.end(), [&](const KeyFrame& item){
+						// It must be a change end on the same frame as this.
+						if (item.type != KeyFrameType::CHANGE_END || item.frame != selection.initial_frame)
+							return false;
+
+						const auto& other = input.frame_bulks[item.frame_bulk_index];
+						assert(other.ChangePresent);
+
+						// If our change end is pitch, the other change must not be pitch, and vice versa.
+						return (target == HLTAS::ChangeTarget::PITCH) != (other.GetChangeTarget() == HLTAS::ChangeTarget::PITCH);
+					});
+					if (it != key_frames.end())
+						other_frame_bulk_index = it->frame_bulk_index;
+
+					Vector viewangles;
+					switch (target) {
+						case HLTAS::ChangeTarget::YAW:
+						case HLTAS::ChangeTarget::TARGET_YAW:
+						case HLTAS::ChangeTarget::TARGET_YAW_OFFSET:
+							viewangles[1] = frame_bulk.GetChangeFinalValue();
+
+							if (other_frame_bulk_index)
+								viewangles[0] = input.frame_bulks[other_frame_bulk_index].GetChangeFinalValue();
+							break;
+						case HLTAS::ChangeTarget::PITCH:
+							viewangles[0] = frame_bulk.GetChangeFinalValue();
+							viewangles[1] = player_datas[selection.initial_frame].Viewangles[1];
+
+							if (other_frame_bulk_index)
+								viewangles[1] = input.frame_bulks[other_frame_bulk_index].GetChangeFinalValue();
+							break;
+					}
+
+					origin_before_rmb_adjustment = hw.cameraOverrideOrigin;
+					angles_before_rmb_adjustment = cl.last_viewangles;
+
+					cl.pEngfuncs->SetViewAngles(viewangles);
+
+					const auto& player = player_datas[selection.initial_frame];
+					hw.cameraOverrideOrigin = player.Origin;
+					if (player.Ducking)
+						hw.cameraOverrideOrigin[2] += 12;
+					else
+						hw.cameraOverrideOrigin[2] += 28;
+
+					ClientDLL::GetInstance().SetMouseState(true);
+					SDL::GetInstance().SetRelativeMouseMode(true);
+				} else if (frame_bulk.AlgorithmParametersPresent && selection.initial_frame + 1 < player_datas.size()) {
+					Vector viewangles;
+					viewangles[1] = player_datas[selection.initial_frame + 1].Viewangles[1];
+
+					auto parameters = HLTAS::AlgorithmParameters {};
+					parameters.Type = HLTAS::ConstraintsType::YAW;
+					parameters.Parameters.Yaw.Yaw = viewangles[1];
+					parameters.Parameters.Yaw.Constraints = 0;
+					frame_bulk.SetAlgorithmParameters(parameters);
+
+					origin_before_rmb_adjustment = hw.cameraOverrideOrigin;
+					angles_before_rmb_adjustment = cl.last_viewangles;
+
+					cl.pEngfuncs->SetViewAngles(viewangles);
+
+					const auto& player = player_datas[selection.initial_frame];
+					hw.cameraOverrideOrigin = player.Origin;
+					if (player.Ducking)
+						hw.cameraOverrideOrigin[2] += 12;
+					else
+						hw.cameraOverrideOrigin[2] += 28;
+
+					ClientDLL::GetInstance().SetMouseState(true);
+					SDL::GetInstance().SetRelativeMouseMode(true);
+				} else {
+					// Can't adjust that.
+					selection.frame_bulk_index = 0;
+				}
+			}
+
+			if (selection.frame_bulk_index > 0 && right_pressed && !right_got_pressed) {
+				auto& frame_bulk = input.frame_bulks[selection.frame_bulk_index];
+				if (frame_bulk.ChangePresent) {
+					float new_target = 0, new_other_target = 0;
+
+					switch (frame_bulk.GetChangeTarget()) {
+						case HLTAS::ChangeTarget::YAW:
+						case HLTAS::ChangeTarget::TARGET_YAW:
+						case HLTAS::ChangeTarget::TARGET_YAW_OFFSET:
+							new_target = cl.last_viewangles[1];
+							new_other_target = cl.last_viewangles[0];
+							break;
+						case HLTAS::ChangeTarget::PITCH:
+							new_target = cl.last_viewangles[0];
+							new_other_target = cl.last_viewangles[1];
+							break;
+					}
+
+					if (frame_bulk.GetChangeFinalValue() != new_target) {
+						frame_bulk.SetChangeFinalValue(new_target);
+						stale_index = selection.frame_bulk_index;
+					}
+
+					if (other_frame_bulk_index && input.frame_bulks[other_frame_bulk_index].GetChangeFinalValue() != new_other_target) {
+						input.frame_bulks[other_frame_bulk_index].SetChangeFinalValue(new_other_target);
+						stale_index = std::min(stale_index, other_frame_bulk_index);
+					}
+				} else if (frame_bulk.AlgorithmParametersPresent) {
+					auto parameters = frame_bulk.GetAlgorithmParameters();
+					assert(parameters.Type == HLTAS::ConstraintsType::YAW);
+					if (parameters.Parameters.Yaw.Yaw != cl.last_viewangles[1]) {
+						parameters.Parameters.Yaw.Yaw = cl.last_viewangles[1];
+						frame_bulk.SetAlgorithmParameters(parameters);
+						stale_index = selection.frame_bulk_index;
+					}
+				} else {
+					assert(false);
+				}
+			}
+
+			if (right_got_released) {
+				if (origin_before_rmb_adjustment != Vector()) {
+					hw.cameraOverrideOrigin = origin_before_rmb_adjustment;
+					cl.pEngfuncs->SetViewAngles(angles_before_rmb_adjustment);
+				}
+				origin_before_rmb_adjustment = Vector();
+				angles_before_rmb_adjustment = Vector();
+				other_frame_bulk_index = 0;
+
+				ClientDLL::GetInstance().SetMouseState(false);
+				SDL::GetInstance().SetRelativeMouseMode(false);
+			}
+
+			// hover over single "target_yaw" and change type
+			if (selection.frame_bulk_index > 0 && (hw.tas_editor_set_target_yaw_velocity_lock || hw.tas_editor_set_target_yaw_look_at)) {
+				auto& frame_bulk = input.frame_bulks[selection.frame_bulk_index];
+				if (frame_bulk.AlgorithmParametersPresent) {
+					auto parameters = HLTAS::AlgorithmParameters {};
+					if (hw.tas_editor_set_target_yaw_look_at) {
+						parameters.Type = HLTAS::ConstraintsType::LOOK_AT;
+						parameters.Parameters.LookAt.Entity = hw.tas_editor_set_target_yaw_look_at_entity;
+						parameters.Parameters.LookAt.X = hw.tas_editor_set_target_yaw_look_at_x;
+						parameters.Parameters.LookAt.Y = hw.tas_editor_set_target_yaw_look_at_y;
+						parameters.Parameters.LookAt.Z = hw.tas_editor_set_target_yaw_look_at_z;
+					} else if (hw.tas_editor_set_target_yaw_velocity_lock) {
+						parameters.Type = HLTAS::ConstraintsType::VELOCITY_LOCK;
+					}
+
+					frame_bulk.SetAlgorithmParameters(parameters);
+					stale_index = selection.frame_bulk_index;
+				}
+			}
+
+			if (selection.frame_bulk_index > 0 && (hw.tas_editor_set_change_to_target_yaw || hw.tas_editor_set_change_to_target_yaw_offset || hw.tas_editor_set_change_to_yaw || hw.tas_editor_set_change_to_pitch)) {
+				auto& frame_bulk = input.frame_bulks[selection.frame_bulk_index];
+				if (frame_bulk.ChangePresent) {
+					const auto it = std::find_if(key_frames.begin(), key_frames.end(), [&](const KeyFrame& item){
+						return item.type == KeyFrameType::CHANGE_END && item.frame_bulk_index == selection.frame_bulk_index;
+					});
+					if (it != key_frames.end() && it->frame < player_datas.size()) {
+						const auto target = frame_bulk.GetChangeTarget();
+						if (hw.tas_editor_set_change_to_target_yaw && target != HLTAS::ChangeTarget::TARGET_YAW) {
+							if (target == HLTAS::ChangeTarget::PITCH)
+								frame_bulk.SetChangeFinalValue(player_datas[it->frame].Viewangles[1]);
+
+							frame_bulk.SetChangeTarget(HLTAS::ChangeTarget::TARGET_YAW);
+							stale_index = selection.frame_bulk_index;
+						}
+						if (hw.tas_editor_set_change_to_target_yaw_offset && target != HLTAS::ChangeTarget::TARGET_YAW_OFFSET) {
+							if (target == HLTAS::ChangeTarget::PITCH)
+								frame_bulk.SetChangeFinalValue(player_datas[it->frame].Viewangles[1]);
+
+							frame_bulk.SetChangeTarget(HLTAS::ChangeTarget::TARGET_YAW_OFFSET);
+							stale_index = selection.frame_bulk_index;
+						}
+						if (hw.tas_editor_set_change_to_yaw && target != HLTAS::ChangeTarget::YAW) {
+							if (target == HLTAS::ChangeTarget::PITCH)
+								frame_bulk.SetChangeFinalValue(player_datas[it->frame].Viewangles[1]);
+
+							frame_bulk.SetChangeTarget(HLTAS::ChangeTarget::YAW);
+							stale_index = selection.frame_bulk_index;
+						}
+						if (hw.tas_editor_set_change_to_pitch && target != HLTAS::ChangeTarget::PITCH) {
+							if (target != HLTAS::ChangeTarget::PITCH)
+								frame_bulk.SetChangeFinalValue(player_datas[it->frame].Viewangles[0]);
+
+							frame_bulk.SetChangeTarget(HLTAS::ChangeTarget::PITCH);
+							stale_index = selection.frame_bulk_index;
+						}
+					}
+				}
+			}
+
+			if (closest_frame > 0 && closest_frame < player_datas.size() && hw.tas_editor_insert_point) {
+				// Figure out, before or in the middle of which frame bulk the line will go.
+				auto split_at = closest_frame;
+				size_t i;
+				for (i = 0; i < input.frame_bulks.size(); ++i) {
+					if (!input.frame_bulks[i].IsMovement())
+						continue;
+
+					if (split_at < input.frame_bulks[i].GetRepeats())
+						break;
+
+					split_at -= input.frame_bulks[i].GetRepeats();
+				}
+
+				if (i < input.frame_bulks.size()) {
+					auto frame_bulk = HLTAS::Frame();
+					auto parameters = HLTAS::AlgorithmParameters {};
+					parameters.Type = HLTAS::ConstraintsType::VELOCITY_LOCK;
+					parameters.Parameters.VelocityLock.Constraints = 0;
+					frame_bulk.SetAlgorithmParameters(parameters);
+
+					if (split_at == 0) {
+						// Put it before the frame bulk.
+						input.frame_bulks.insert(input.frame_bulks.begin() + i, frame_bulk);
+						selection.frame_bulk_index = i;
+					} else {
+						// Split the frame bulk in two and insert in the middle.
+						auto new_frame_bulk_repeats = input.frame_bulks[i].GetRepeats() - split_at;
+						input.set_repeats(i, split_at);
+						auto new_frame_bulk = input.frame_bulks[i];
+						new_frame_bulk.Commands.clear(); // So pause;bxt_tas_editor 1 doesn't copy over.
+						new_frame_bulk.Comments.clear();
+						new_frame_bulk.SetRepeats(new_frame_bulk_repeats);
+						input.frame_bulks.insert(input.frame_bulks.begin() + i + 1, new_frame_bulk);
+
+						// Insert our frame bulk in the middle.
+						input.frame_bulks.insert(input.frame_bulks.begin() + i + 1, frame_bulk);
+						selection.frame_bulk_index = i + 1;
+					}
+
+					stale_index = i;
+
+					selection.type = KeyFrameType::FRAME_BULK;
+					selection.initial_frame = closest_frame;
+					selection.last_frame = closest_frame;
+
+					// Cursed dragging re-use.
+					left_pressed_at = mouse;
+
+					const auto& player = player_datas[selection.initial_frame];
+					const auto& prev_player = player_datas[selection.initial_frame - 1];
+					Vector origin_ = player.Origin;
+					Vector screen_point;
+					pTriAPI->WorldToScreen(origin_, screen_point);
+					auto screen_point_px = stw_to_pixels(screen_point.Make2D());
+					Vector prev_origin_ = prev_player.Origin;
+					Vector prev_screen_point;
+					pTriAPI->WorldToScreen(prev_origin_, prev_screen_point);
+					auto prev_screen_point_px = stw_to_pixels(prev_screen_point.Make2D());
+					saved_lmb_diff = (screen_point_px - prev_screen_point_px).Normalize();
+				}
+			}
+
+			if (selection.frame_bulk_index > 0 && hw.tas_editor_delete_point) {
+				input.mark_as_stale(selection.frame_bulk_index);
+				input.frame_bulks.erase(input.frame_bulks.begin() + selection.frame_bulk_index);
+				stale_index = selection.frame_bulk_index;
+			}
+
+			if (closest_frame > 0 && closest_frame < player_datas.size() && hw.tas_editor_apply_smoothing) {
+				// Check that we're not inside a stationary (green) region.
+				if (std::find_if(large_enough_same_yaw_regions.begin(), large_enough_same_yaw_regions.end(), [&](const pair<size_t, size_t>& region) {
+					return region.first <= closest_frame && region.second > closest_frame;
+				}) == large_enough_same_yaw_regions.end()) {
+					// Find the closest preceding stationary region.
+					const auto it = std::find_if(large_enough_same_yaw_regions.rbegin(), large_enough_same_yaw_regions.rend(), [&](const pair<size_t, size_t>& region) {
+						return region.second <= closest_frame;
+					});
+					if (it != large_enough_same_yaw_regions.rend()) {
+						const auto prec_region = *it;
+
+						// Find the closest subsequent stationary region.
+						const auto it = std::find_if(large_enough_same_yaw_regions.begin(), large_enough_same_yaw_regions.end(), [&](const pair<size_t, size_t>& region) {
+							return region.first > closest_frame;
+						});
+						if (it != large_enough_same_yaw_regions.end()) {
+							const auto subs_region = *it;
+
+							// Compute first and last frames.
+							size_t first_frame;
+							float time = 0;
+							for (first_frame = prec_region.second - 1; first_frame > prec_region.first; --first_frame) {
+								time += input.frametimes[first_frame];
+								if (time + 1e-4 >= apply_smoothing_over_s)
+									break;
+							}
+
+							size_t last_frame;
+							time = 0;
+							for (last_frame = subs_region.first; last_frame < subs_region.second; ++last_frame) {
+								time += input.frametimes[last_frame];
+								if (time + 1e-4 >= apply_smoothing_over_s)
+									break;
+							}
+
+							// First, unwrap the yaws to get rid of 359 <-> 1 changes.
+							vector<float> unwrapped_yaws;
+							unwrapped_yaws.push_back(player_datas[first_frame].Viewangles[1]);
+							float current_diff = 0;
+							for (size_t i = first_frame + 1; i < last_frame; ++i) {
+								const auto yaw = player_datas[i].Viewangles[1] + current_diff;
+								const auto prev_yaw = unwrapped_yaws.back();
+								auto diff = yaw - prev_yaw;
+								while (diff >= 180) {
+									diff -= 360;
+									current_diff -= 360;
+								}
+								while (diff <= -180) {
+									diff += 360;
+									current_diff += 360;
+								}
+								unwrapped_yaws.push_back(prev_yaw + diff);
+							}
+
+							float high_weight_multiplier = CVars::_bxt_tas_editor_apply_smoothing_high_weight_multiplier.GetFloat();
+							float high_weight_duration = CVars::_bxt_tas_editor_apply_smoothing_high_weight_duration.GetFloat();
+
+							vector<float> yaws;
+							size_t i;
+
+							// Fill the first half-kernel-size worth of yaws.
+							time = 0;
+							for (i = first_frame; i < last_frame; ++i) {
+								if (time + input.frametimes[i] + 1e-4 >= apply_smoothing_over_s / 2)
+									break;
+
+								yaws.push_back(unwrapped_yaws[i - first_frame]);
+								time += input.frametimes[i];
+							}
+
+							// Figure out how much to leave at the end.
+							time = 0;
+							size_t j;
+							for (j = last_frame - 1; j > first_frame; --j) {
+								time += input.frametimes[j];
+								if (time + input.frametimes[j - 1] + 1e-4 >= apply_smoothing_over_s / 2)
+									break;
+							}
+
+							// Fill the intermediate yaws.
+							for (; i < j; ++i) {
+								// Start with the current frame.
+								time = input.frametimes[i];
+
+								// If most of this frame covers the high weight zone, raise the weight.
+								if (time - high_weight_duration < high_weight_duration)
+									time *= high_weight_multiplier;
+
+								float final_yaw = unwrapped_yaws[i - first_frame] * time;
+								float total_time = time;
+
+								// Walk back half an interval.
+								time = input.frametimes[i] / 2;
+								for (size_t k = i - 1; k >= first_frame; --k) {
+									float yaw = unwrapped_yaws[k - first_frame];
+									float dt = input.frametimes[k];
+									if (time + dt >= apply_smoothing_over_s / 2) {
+										// Limit the contribution of the last frame so a single low FPS frame on the edge doesn't skew the results.
+										dt = apply_smoothing_over_s / 2 - time;
+										final_yaw += yaw * dt;
+										total_time += dt;
+										break;
+									} else {
+										time += dt;
+
+										// If most of this frame covers the high weight zone, raise the weight.
+										if (time - high_weight_duration / 2 < high_weight_duration / 2 - (time - dt))
+											dt *= high_weight_multiplier;
+
+										final_yaw += yaw * dt;
+										total_time += dt;
+									}
+								}
+
+								// Walk forward half an interval.
+								time = input.frametimes[i] / 2;
+								for (size_t k = i + 1; k < last_frame; ++k) {
+									float yaw = unwrapped_yaws[k - first_frame];
+									float dt = input.frametimes[k];
+									if (time + dt >= apply_smoothing_over_s / 2) {
+										// Limit the contribution of the last frame so a single low FPS frame on the edge doesn't skew the results.
+										dt = apply_smoothing_over_s / 2 - time;
+										final_yaw += yaw * dt;
+										total_time += dt;
+										break;
+									} else {
+										time += dt;
+
+										// If most of this frame covers the high weight zone, raise the weight.
+										if (time - high_weight_duration / 2 < high_weight_duration / 2 - (time - dt))
+											dt *= high_weight_multiplier;
+
+										final_yaw += yaw * dt;
+										total_time += dt;
+									}
+								}
+
+								yaws.push_back(final_yaw / total_time);
+							}
+
+							// Fill the last half-kernel-size worth of yaws.
+							for (; j < last_frame; ++j)
+								yaws.push_back(unwrapped_yaws[j - first_frame]);
+
+							// Insert the target yaw override line.
+
+							// Figure out, before or in the middle of which frame bulk the line will go.
+							auto split_at = first_frame;
+							for (i = 0; i < input.frame_bulks.size(); ++i) {
+								if (!input.frame_bulks[i].IsMovement())
+									continue;
+
+								if (split_at < input.frame_bulks[i].GetRepeats())
+									break;
+
+								split_at -= input.frame_bulks[i].GetRepeats();
+							}
+
+							if (i < input.frame_bulks.size()) {
+								auto frame_bulk = HLTAS::Frame();
+								frame_bulk.TargetYawOverride = yaws;
+
+								if (split_at == 0) {
+									// Put it before the frame bulk.
+									input.frame_bulks.insert(input.frame_bulks.begin() + i, frame_bulk);
+									selection.frame_bulk_index = i;
+								} else {
+									// Split the frame bulk in two and insert in the middle.
+									auto new_frame_bulk_repeats = input.frame_bulks[i].GetRepeats() - split_at;
+									input.set_repeats(i, split_at);
+									auto new_frame_bulk = input.frame_bulks[i];
+									new_frame_bulk.Commands.clear(); // So pause;bxt_tas_editor 1 doesn't copy over.
+									new_frame_bulk.Comments.clear();
+									new_frame_bulk.SetRepeats(new_frame_bulk_repeats);
+									input.frame_bulks.insert(input.frame_bulks.begin() + i + 1, new_frame_bulk);
+
+									// Insert our frame bulk in the middle.
+									input.frame_bulks.insert(input.frame_bulks.begin() + i + 1, frame_bulk);
+									selection.frame_bulk_index = i + 1;
+								}
+
+								stale_index = i;
+							}
+						} else {
+							hw.ORIG_Con_Printf("Cannot apply smoothing: there's no large enough stationary yaw region (green) after selection.\n");
+						}
+					} else {
+						hw.ORIG_Con_Printf("Cannot apply smoothing: there's no large enough stationary yaw region (green) before selection.\n");
+					}
+				} else {
+					hw.ORIG_Con_Printf("To apply smoothing you must point at a region with changing yaw (blue).\n");
+				}
 			}
 		} else {
-			// TASEditorMode::EDIT
-			if (input.frame_bulks.size() == 0)
-				return;
-
-			input.simulate(SimulateFrameBulks::ALL);
-
 			size_t next_frame_bulk_start_index = 1;
 
 			// frame_bulk_starts always contains at least 1 element (zero), in which case we don't
@@ -517,7 +1545,6 @@ namespace TriangleDrawing
 			if (input.frame_bulk_starts.size() == 1)
 				next_frame_bulk_start_index = 0;
 
-			Vector2D closest_edge_px;
 			float closest_edge_px_dist;
 			size_t closest_edge_frame = 0;
 
@@ -536,6 +1563,8 @@ namespace TriangleDrawing
 			} else {
 				for (size_t i = 1; i < frame_bulk_starts.size(); ++i) {
 					auto frame = frame_bulk_starts[i];
+					if (frame < start_frame)
+						continue;
 
 					const auto origin = Vector(player_datas[frame].Origin);
 					auto disp = origin - view;
@@ -549,8 +1578,10 @@ namespace TriangleDrawing
 						if (closest_edge_frame == 0 || dist < closest_edge_px_dist) {
 							closest_edge_frame = frame;
 							closest_edge_px_dist = dist;
-							closest_edge_px = screen_point_px;
 							closest_edge_prev_frame_bulk_index = i - 1;
+							while (closest_edge_prev_frame_bulk_index > 0
+									&& !input.frame_bulks[closest_edge_prev_frame_bulk_index].IsMovement())
+								closest_edge_prev_frame_bulk_index--;
 						}
 					}
 				}
@@ -565,8 +1596,8 @@ namespace TriangleDrawing
 			}
 
 			static double saved_yaw = 0;
-			if ((right_got_pressed || mouse4_got_pressed ) && closest_edge_frame != 0
-					&& input.frame_bulks[closest_edge_prev_frame_bulk_index].GetYawPresent())
+			if ((right_got_pressed || mouse4_got_pressed) && closest_edge_frame != 0
+					&& input.frame_bulks[closest_edge_prev_frame_bulk_index].HasYaw())
 				saved_yaw = input.frame_bulks[closest_edge_prev_frame_bulk_index].GetYaw();
 
 			size_t frames_until_non_ground_collision = frame_limit;
@@ -574,13 +1605,11 @@ namespace TriangleDrawing
 			// Apply color to frame bulks right before and after the selected edge.
 			size_t color_from = frame_limit;
 			size_t color_to = frame_limit;
-			if (closest_edge_frame != 0) {
+			if (closest_edge_frame != 0 && closest_edge_prev_frame_bulk_index < frame_bulk_starts.size()) {
 				color_from = frame_bulk_starts[closest_edge_prev_frame_bulk_index];
 				if (closest_edge_prev_frame_bulk_index + 2 < frame_bulk_starts.size())
 					color_to = frame_bulk_starts[closest_edge_prev_frame_bulk_index + 2];
 			}
-
-			size_t stale_index = std::numeric_limits<size_t>::max();
 
 			size_t closest_frame = 0;
 			// This initial value is never used, but g++ in release mode doesn't see that.
@@ -591,28 +1620,113 @@ namespace TriangleDrawing
 			static Vector2D saved_rmb_diff;
 			static Vector2D saved_ms4_diff;
 
-			pTriAPI->Color4f(0.8f, 0.8f, 0.8f, 1);
+			Vector last_shown_view_angle;
+			Vector last_shown_view_angle_origin;
+
 			for (size_t frame = 1; frame < player_datas.size(); ++frame) {
+				if (frame < start_frame) {
+					// Incrementing next_frame_bulk_start_index 
+					// when frames are skipped to correctly render perpendicular line.
+					while (next_frame_bulk_start_index + 1 != frame_bulk_starts.size()
+							&& frame == frame_bulk_starts[next_frame_bulk_start_index])
+						++next_frame_bulk_start_index;
+					continue;
+				}
 				const auto origin = Vector(player_datas[frame].Origin);
+
+				// Draw the pushables.
+				for (const auto& pushable : input.pushables[frame]) {
+					if (pushable.index == 0)
+						break;
+
+					const simulation_ipc::PushableInfo *last_frame_pushable = nullptr;
+					for (const auto &p : input.pushables[frame - 1]) {
+						if (p.index == 0)
+							break;
+
+						if (p.index == pushable.index)
+							last_frame_pushable = &p;
+					}
+
+					if (!last_frame_pushable)
+						continue;
+
+					if (pushable.water_level >= 1) {
+						if (pushable.did_obbo)
+							pTriAPI->Color4f(0, 1, 1, 1);
+						else
+							pTriAPI->Color4f(0.4f, 0.4f, 1, 1);
+					} else {
+						if (pushable.did_obbo)
+							pTriAPI->Color4f(0, 1, 0, 1);
+						else
+							pTriAPI->Color4f(1, 1, 0, 1);
+					}
+					TriangleUtils::DrawLine(pTriAPI, last_frame_pushable->origin, pushable.origin);
+				}
+
+				if (frame >= input.first_predicted_frame && input.received_data_from_second_game)
+					pTriAPI->Color4f(0.5f, 0.5f, 0.5f, 1);
+				else
+					pTriAPI->Color4f(0.8f, 0.8f, 0.8f, 1);
 
 				if (frame > color_from && frame <= color_to) {
 					// If we bumped into something along the way
-					if (frames_until_non_ground_collision == frame_limit && fractions[frame] != 1) {
-						auto n = normalzs[frame];
+					bool collision = false;
+
+					for (int i = 0; i < 4; ++i) {
+						if (fractions[frame][i] == 1)
+							break;
+
+						auto n = normalzs[frame][i];
 						// And it wasn't a ground or a ceiling
-						if (n < 0.7 && n != -1)
-							frames_until_non_ground_collision = frame;
+						if (n != 1 && n != -1) {
+							collision = true;
+							break;
+						}
 					}
 
-					if (frame > frames_until_non_ground_collision) {
-						pTriAPI->Color4f(1, 0, 0, 1);
+					if (frames_until_non_ground_collision == frame_limit && collision)
+						frames_until_non_ground_collision = frame;
+
+					if (collision) {
+						// Color frames with collision red.
+						if (frame >= input.first_predicted_frame && input.received_data_from_second_game)
+							pTriAPI->Color4f(0.6f, 0, 0, 1);
+						else
+							pTriAPI->Color4f(1, 0, 0, 1);
+					} else if (frame > frames_until_non_ground_collision) {
+						// Color frames after collision pink.
+						if (frame >= input.first_predicted_frame && input.received_data_from_second_game)
+							pTriAPI->Color4f(0.6f, 0.4f, 0.4f, 1);
+						else
+							pTriAPI->Color4f(1, 0.7f, 0.7f, 1);
 					} else {
-						pTriAPI->Color4f(0, 1, 0, 1);
+						if (frame >= input.first_predicted_frame && input.received_data_from_second_game)
+							pTriAPI->Color4f(0, 0.6f, 0, 1);
+						else
+							pTriAPI->Color4f(0, 1, 0, 1);
 					}
 				}
 
 				const auto prev_origin = Vector(player_datas[frame - 1].Origin);
 				TriangleUtils::DrawLine(pTriAPI, prev_origin, origin);
+
+				// Draw the view angle.
+				{
+					auto forward = cl.AnglesToForward(player_datas[frame].Viewangles);
+
+					if (last_shown_view_angle == Vector()
+							// Angle differs by more than ~11.5 degrees.
+							|| DotProduct(forward, last_shown_view_angle) < 0.98f
+							|| (last_shown_view_angle_origin - origin).Length() > 50.f) {
+						last_shown_view_angle = forward;
+						last_shown_view_angle_origin = origin;
+						forward = origin + forward * 5;
+						pTriAPI->Color4f(0.4f, 0.4f, 1, 1);
+						TriangleUtils::DrawLine(pTriAPI, origin, forward);
+					}
+				}
 
 				// If we're inserting, we need to find the closest frame.
 				if (hw.tas_editor_insert_point) {
@@ -636,37 +1750,19 @@ namespace TriangleDrawing
 					frames_until_non_ground_collision = frame_limit;
 
 				if (frame == frame_bulk_starts[next_frame_bulk_start_index]) {
-					if (next_frame_bulk_start_index + 1 != frame_bulk_starts.size())
+					while (next_frame_bulk_start_index + 1 != frame_bulk_starts.size()
+							&& frame == frame_bulk_starts[next_frame_bulk_start_index])
 						++next_frame_bulk_start_index;
 
-					auto line = (origin - prev_origin).Normalize();
-
-					Vector perpendicular;
-					if (line.x == 0 && line.y == 0)
-						perpendicular = Vector(1, 0, 0);
-					else if (line.x == 0)
-						perpendicular = Vector(1, 0, 0);
-					else if (line.y == 0)
-						perpendicular = Vector(0, 1, 0);
-					else
-						perpendicular = Vector(1, -line.x / line.y, 0).Normalize();
-
-					// Make sure it's oriented in a particular way: this makes right-drag to change
-					// yaw behave as expected (the yaw will change in the direction where you move
-					// the mouse).
-					if (perpendicular.x * line.y - perpendicular.y * line.x > 0) {
-						perpendicular.x = -perpendicular.x;
-						perpendicular.y = -perpendicular.y;
-					}
-
-					perpendicular *= 5;
-					Vector a = origin + perpendicular, b = origin - perpendicular;
+					auto perp = perpendicular(prev_origin, origin);
+					perp *= 5;
+					Vector a = origin + perp, b = origin - perp;
 
 					if (frame == closest_edge_frame) {
 						auto& frame_bulk = input.frame_bulks[closest_edge_prev_frame_bulk_index];
 
 						// Visualize the target yaw.
-						if (frame_bulk.GetYawPresent()) {
+						if (frame_bulk.HasYaw()) {
 							auto yaw = frame_bulk.GetYaw() * M_DEG2RAD;
 							auto yaw_dir = Vector(static_cast<float>(std::cos(yaw)), static_cast<float>(std::sin(yaw)), 0);
 							yaw_dir *= 20;
@@ -730,8 +1826,39 @@ namespace TriangleDrawing
 			if (closest_edge_frame != 0) {
 				auto& frame_bulk = input.frame_bulks[closest_edge_prev_frame_bulk_index];
 
+				float current_player_vel = 0;
+				float current_player_zvel = 0;
+				float current_player_pos[3] = {0, 0, 0};
+				float current_player_realyaw = 0;
+
+				float current_player_health = 0;
+				float current_player_armor = 0;
+
+				float current_player_stamina = 0;
+
+				if (input.player_datas.size() > closest_edge_frame) {
+					auto& current_player_data = input.player_datas[closest_edge_frame];
+					auto& current_player_vels = current_player_data.Velocity;
+
+					current_player_vel = std::hypotf(current_player_vels[0], current_player_vels[1]);
+					current_player_zvel = current_player_vels[2];
+					current_player_pos[0] = current_player_data.Origin[0];
+					current_player_pos[1] = current_player_data.Origin[1];
+					current_player_pos[2] = current_player_data.Origin[2];
+					current_player_realyaw = current_player_data.Viewangles[1];
+
+					current_player_health = input.player_health_datas[closest_edge_frame];
+					current_player_armor = input.player_armor_datas[closest_edge_frame];
+
+					current_player_stamina = current_player_data.StaminaTime;
+				}
+
 				// Update the HUD status before any changes, since that's the state that was visualized earlier.
-				CustomHud::UpdateTASEditorStatus(frame_bulk);
+				CustomHud::UpdateTASEditorStatus(
+					frame_bulk,
+					current_player_vel, current_player_zvel, current_player_pos,
+					current_player_realyaw,
+					current_player_health, current_player_armor, current_player_stamina);
 
 				if (left_pressed) {
 					auto mouse_diff = mouse - left_pressed_at;
@@ -759,7 +1886,7 @@ namespace TriangleDrawing
 					}
 				}
 
-				if (right_pressed && frame_bulk.GetYawPresent()) {
+				if (right_pressed && frame_bulk.HasYaw()) {
 					auto mouse_diff = mouse - right_pressed_at;
 
 					auto amount = DotProduct(mouse_diff, saved_rmb_diff) * 0.1f * adjustment_speed;
@@ -770,7 +1897,7 @@ namespace TriangleDrawing
 					}
 				}
 
-				if (mouse4_pressed && frame_bulk.GetYawPresent()) {
+				if (mouse4_pressed && frame_bulk.HasYaw()) {
 					auto mouse_diff = mouse - mouse4_pressed_at;
 
 					auto amount = DotProduct(mouse_diff, saved_ms4_diff) * 0.1f * adjustment_speed;
@@ -784,35 +1911,67 @@ namespace TriangleDrawing
 
 						// SetYaw towards previous framebulks
 						if (closest_edge_prev_frame_bulk_index != 0) {
-							for (size_t i = closest_edge_prev_frame_bulk_index; i > 0; i--)
-							{
+							for (size_t i = closest_edge_prev_frame_bulk_index; i > 0; i--) {
 								auto real_index = i - 1;
 
-								HLTAS::Frame* prev_framebulk = &(input.frame_bulks[real_index]);
+								HLTAS::Frame *prev_line = &(input.frame_bulks[real_index]);
 
-								if (prev_framebulk->GetYawPresent() && prev_framebulk->GetYaw() == old_yaw) {
-									stale_index = real_index;
-									prev_framebulk->SetYaw(new_yaw);
+								if (!prev_line->IsMovement()) {
+									continue;
 								}
-								else {
+
+								if (prev_line->HasYaw() && prev_line->GetYaw() == old_yaw) {
+									stale_index = real_index;
+									prev_line->SetYaw(new_yaw);
+								} else {
 									break;
 								}
 							}
 						}
 
 						// SetYaw towards end of all frame bulks
-						for (size_t i = closest_edge_prev_frame_bulk_index + 1; i < input.frame_bulks.size(); i++)
-						{
-							HLTAS::Frame* next_framebulk = &(input.frame_bulks[i]);
+						for (size_t i = closest_edge_prev_frame_bulk_index + 1; i < input.frame_bulks.size(); i++) {
+							HLTAS::Frame *next_line = &(input.frame_bulks[i]);
 
-							if (next_framebulk->GetYawPresent() && next_framebulk->GetYaw() == old_yaw) {
-								next_framebulk->SetYaw(new_yaw);
+							if (!next_line->IsMovement()) {
+								continue;
 							}
-							else {
+
+							if (next_line->HasYaw() && next_line->GetYaw() == old_yaw) {
+								next_line->SetYaw(new_yaw);
+							} else {
 								break;
 							}
 						}
 					}
+				}
+
+				if (hw.tas_editor_toggle_s00) {
+					if (!frame_bulk.Strafe
+						    || frame_bulk.GetDir() != HLTAS::StrafeDir::LEFT
+						    || frame_bulk.GetType() != HLTAS::StrafeType::MAXACCEL) {
+						frame_bulk.Strafe = true;
+						frame_bulk.SetDir(HLTAS::StrafeDir::LEFT);
+						frame_bulk.SetType(HLTAS::StrafeType::MAXACCEL);
+						frame_bulk.SetYawPresent(false);
+					} else {
+						frame_bulk.Strafe = false;
+					}
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
+				if (hw.tas_editor_toggle_s01) {
+					if (!frame_bulk.Strafe
+						    || frame_bulk.GetDir() != HLTAS::StrafeDir::RIGHT
+						    || frame_bulk.GetType() != HLTAS::StrafeType::MAXACCEL) {
+						frame_bulk.Strafe = true;
+						frame_bulk.SetDir(HLTAS::StrafeDir::RIGHT);
+						frame_bulk.SetType(HLTAS::StrafeType::MAXACCEL);
+						frame_bulk.SetYawPresent(false);
+					} else {
+						frame_bulk.Strafe = false;
+					}
+					stale_index = closest_edge_prev_frame_bulk_index;
 				}
 
 				if (hw.tas_editor_toggle_s03) {
@@ -823,10 +1982,38 @@ namespace TriangleDrawing
 						frame_bulk.SetDir(HLTAS::StrafeDir::YAW);
 						frame_bulk.SetType(HLTAS::StrafeType::MAXACCEL);
 
-						if (!frame_bulk.GetYawPresent()) {
+						if (!frame_bulk.HasYaw()) {
 							const auto& prev_frame_bulk = input.frame_bulks[closest_edge_prev_frame_bulk_index];
-							frame_bulk.SetYaw(prev_frame_bulk.GetYawPresent() ? prev_frame_bulk.GetYaw() : 0);
+							frame_bulk.SetYaw(prev_frame_bulk.HasYaw() ? prev_frame_bulk.GetYaw() : 0);
 						}
+					} else {
+						frame_bulk.Strafe = false;
+					}
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
+				if (hw.tas_editor_toggle_s10) {
+					if (!frame_bulk.Strafe
+						    || frame_bulk.GetDir() != HLTAS::StrafeDir::LEFT
+						    || frame_bulk.GetType() != HLTAS::StrafeType::MAXANGLE) {
+						frame_bulk.Strafe = true;
+						frame_bulk.SetDir(HLTAS::StrafeDir::LEFT);
+						frame_bulk.SetType(HLTAS::StrafeType::MAXANGLE);
+						frame_bulk.SetYawPresent(false);
+					} else {
+						frame_bulk.Strafe = false;
+					}
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
+				if (hw.tas_editor_toggle_s11) {
+					if (!frame_bulk.Strafe
+						    || frame_bulk.GetDir() != HLTAS::StrafeDir::RIGHT
+						    || frame_bulk.GetType() != HLTAS::StrafeType::MAXANGLE) {
+						frame_bulk.Strafe = true;
+						frame_bulk.SetDir(HLTAS::StrafeDir::RIGHT);
+						frame_bulk.SetType(HLTAS::StrafeType::MAXANGLE);
+						frame_bulk.SetYawPresent(false);
 					} else {
 						frame_bulk.Strafe = false;
 					}
@@ -841,9 +2028,9 @@ namespace TriangleDrawing
 						frame_bulk.SetDir(HLTAS::StrafeDir::YAW);
 						frame_bulk.SetType(HLTAS::StrafeType::MAXANGLE);
 
-						if (!frame_bulk.GetYawPresent()) {
+						if (!frame_bulk.HasYaw()) {
 							const auto& prev_frame_bulk = input.frame_bulks[closest_edge_prev_frame_bulk_index];
-							frame_bulk.SetYaw(prev_frame_bulk.GetYawPresent() ? prev_frame_bulk.GetYaw() : 0);
+							frame_bulk.SetYaw(prev_frame_bulk.HasYaw() ? prev_frame_bulk.GetYaw() : 0);
 						}
 					} else {
 						frame_bulk.Strafe = false;
@@ -859,6 +2046,52 @@ namespace TriangleDrawing
 						frame_bulk.SetDir(HLTAS::StrafeDir::BEST);
 						frame_bulk.SetType(HLTAS::StrafeType::MAXDECCEL);
 						frame_bulk.SetYawPresent(false);
+					} else {
+						frame_bulk.Strafe = false;
+					}
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
+				if (hw.tas_editor_toggle_s06) {
+					if (!frame_bulk.Strafe
+					    || frame_bulk.GetDir() != HLTAS::StrafeDir::LEFT_RIGHT
+					    || frame_bulk.GetType() != HLTAS::StrafeType::MAXACCEL) {
+						unsigned count = 30;
+						if (frame_bulk.HasCount()) {
+							count = frame_bulk.GetCount();
+						} else {
+							const auto& prev_frame_bulk = input.frame_bulks[closest_edge_prev_frame_bulk_index];
+							if (prev_frame_bulk.HasCount())
+								count = prev_frame_bulk.GetCount();
+						}
+
+						frame_bulk.Strafe = true;
+						frame_bulk.SetDir(HLTAS::StrafeDir::LEFT_RIGHT);
+						frame_bulk.SetType(HLTAS::StrafeType::MAXACCEL);
+						frame_bulk.SetCount(count);
+					} else {
+						frame_bulk.Strafe = false;
+					}
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
+				if (hw.tas_editor_toggle_s07) {
+					if (!frame_bulk.Strafe
+					    || frame_bulk.GetDir() != HLTAS::StrafeDir::RIGHT_LEFT
+					    || frame_bulk.GetType() != HLTAS::StrafeType::MAXACCEL) {
+						unsigned count = 30;
+						if (frame_bulk.HasCount()) {
+							count = frame_bulk.GetCount();
+						} else {
+							const auto& prev_frame_bulk = input.frame_bulks[closest_edge_prev_frame_bulk_index];
+							if (prev_frame_bulk.HasCount())
+								count = prev_frame_bulk.GetCount();
+						}
+
+						frame_bulk.Strafe = true;
+						frame_bulk.SetDir(HLTAS::StrafeDir::RIGHT_LEFT);
+						frame_bulk.SetType(HLTAS::StrafeType::MAXACCEL);
+						frame_bulk.SetCount(count);
 					} else {
 						frame_bulk.Strafe = false;
 					}
@@ -984,10 +2217,15 @@ namespace TriangleDrawing
 					stale_index = closest_edge_prev_frame_bulk_index;
 				}
 
+				if (hw.tas_editor_set_frametime) {
+					frame_bulk.Frametime = hw.tas_editor_set_frametime_time;
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
 				if (hw.tas_editor_set_yaw
 						// If we're strafing, then if we can set the yaw it should already be present.
 						// If we're not strafing, then we can set the yaw.
-						&& (frame_bulk.GetYawPresent() || !frame_bulk.Strafe)) {
+						&& frame_bulk.HasYaw()) {
 					frame_bulk.SetYaw(hw.tas_editor_set_yaw_yaw);
 					stale_index = closest_edge_prev_frame_bulk_index;
 				}
@@ -1006,6 +2244,11 @@ namespace TriangleDrawing
 					frame_bulk.Commands = hw.tas_editor_set_commands_commands;
 				}
 
+				if (hw.tas_editor_set_left_right_count && frame_bulk.HasCount()) {
+					frame_bulk.SetCount(hw.tas_editor_set_left_right_count_count);
+					stale_index = closest_edge_prev_frame_bulk_index;
+				}
+
 				if (hw.tas_editor_unset_yaw
 						// Yaw must be set if we're strafing to yaw or point.
 						&& !(frame_bulk.Strafe
@@ -1022,9 +2265,9 @@ namespace TriangleDrawing
 			}
 
 			if (closest_edge_frame != 0
-					// TODO: make it possible to set the very end as the run point.
-					&& closest_edge_prev_frame_bulk_index + 1 < input.frame_bulks.size()
-					&& hw.tas_editor_set_run_point_and_save) {
+				    // TODO: make it possible to set the very end as the run point.
+				    && closest_edge_prev_frame_bulk_index + 1 < input.frame_bulks.size()
+				    && hw.tas_editor_set_run_point_and_save) {
 				auto commands = input.frame_bulks[0].Commands;
 				if (commands.empty())
 					commands = "stop;bxt_timer_stop;pause;bxt_tas_editor 1";
@@ -1061,12 +2304,13 @@ namespace TriangleDrawing
 			}
 
 			if (closest_edge_frame != 0 && hw.tas_editor_delete_point) {
+				input.mark_as_stale(closest_edge_prev_frame_bulk_index);
 				input.frame_bulks.erase(input.frame_bulks.begin() + closest_edge_prev_frame_bulk_index);
 				stale_index = closest_edge_prev_frame_bulk_index;
 			}
-
-			input.mark_as_stale(stale_index);
 		}
+
+		input.mark_as_stale(stale_index);
 	}
 
 	void ResetTASEditorCommands()
@@ -1074,9 +2318,15 @@ namespace TriangleDrawing
 		auto& hw = HwDLL::GetInstance();
 		hw.tas_editor_delete_point = false;
 		hw.tas_editor_insert_point = false;
+		hw.tas_editor_toggle_s00 = false;
+		hw.tas_editor_toggle_s01 = false;
 		hw.tas_editor_toggle_s03 = false;
+		hw.tas_editor_toggle_s10 = false;
+		hw.tas_editor_toggle_s11 = false;
 		hw.tas_editor_toggle_s13 = false;
 		hw.tas_editor_toggle_s22 = false;
+		hw.tas_editor_toggle_s06 = false;
+		hw.tas_editor_toggle_s07 = false;
 		hw.tas_editor_toggle_lgagst = false;
 		hw.tas_editor_toggle_autojump = false;
 		hw.tas_editor_toggle_ducktap = false;
@@ -1097,13 +2347,22 @@ namespace TriangleDrawing
 		hw.tas_editor_toggle_attack1 = false;
 		hw.tas_editor_toggle_attack2 = false;
 		hw.tas_editor_toggle_reload = false;
+		hw.tas_editor_set_frametime = false;
+		hw.tas_editor_set_change_to_target_yaw = false;
+		hw.tas_editor_set_change_to_target_yaw_offset = false;
+		hw.tas_editor_set_change_to_yaw = false;
+		hw.tas_editor_set_change_to_pitch = false;
+		hw.tas_editor_set_target_yaw_velocity_lock = false;
+		hw.tas_editor_set_target_yaw_look_at = false;
 		hw.tas_editor_set_yaw = false;
 		hw.tas_editor_set_pitch = false;
 		hw.tas_editor_set_repeats = false;
 		hw.tas_editor_set_commands = false;
+		hw.tas_editor_set_left_right_count = false;
 		hw.tas_editor_unset_yaw = false;
 		hw.tas_editor_unset_pitch = false;
 		hw.tas_editor_set_run_point_and_save = false;
+		hw.tas_editor_apply_smoothing = false;
 	}
 
 	void VidInit()
@@ -1128,6 +2387,11 @@ namespace TriangleDrawing
 		DrawTriggers(pTriAPI);
 		DrawCustomTriggers(pTriAPI);
 		DrawAbsMinMax(pTriAPI);
+		DrawPlayerAbsMinMax(pTriAPI);
+		DrawMonsterAbsMinMax(pTriAPI);
+		DrawBulletsEnemyTrace(pTriAPI);
+		DrawBulletsPlayerTrace(pTriAPI);
+		DrawSplits(pTriAPI);
 
 		DrawTASEditor(pTriAPI);
 		ResetTASEditorCommands();

@@ -10,6 +10,9 @@ namespace CustomHud
 		float velocity[3];
 		float viewangles[3];
 		float health;
+		float armorvalue;
+		int waterlevel;
+		float stamina;
 	} playerinfo;
 
 	void Init();
@@ -23,11 +26,14 @@ namespace CustomHud
 	void TimePassed(double time);
 	void ResetTime();
 	void SetCountingTime(bool counting);
+	void SetInvalidRun(bool invalidated);
 	void SendTimeUpdate();
 	void SaveTimeToDemo();
 	Interprocess::Time GetTime();
+	bool GetCountingTime();
+	bool GetInvalidRun();
 
 	const SCREENINFO& GetScreenInfo();
 
-	void UpdateTASEditorStatus(const HLTAS::Frame& frame_bulk);
+	void UpdateTASEditorStatus(const HLTAS::Frame& frame_bulk, const float& player_vel, const float& player_zvel, const float player_pos[3], const float& player_realyaw, const float& player_health, const float& player_armor, const float& player_stamina);
 };

@@ -2,32 +2,43 @@ name: CI
 
 on: [push]
 
+# on:
+#   push:
+#   pull_request:
+#   workflow_dispatch:
+#   schedule:
+#     - cron: '0 0 1 * *' # Monthly
+
 jobs:
   build-linux:
     name: Build on Linux (${{ matrix.configuration }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     strategy:
       fail-fast: false
       matrix:
         configuration: [Release, Debug]
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         submodules: recursive
+        # We need the full history to find the tag
+        fetch-depth: 0
+
+    # We need the tags for the version string
+    - run: git fetch --force --tags
 
     - name: Install dependencies
       run: |
+        sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install g++-multilib libboost-dev mesa-common-dev ninja-build
+        sudo apt-get install g++-multilib libboost-dev mesa-common-dev ninja-build libgl-dev:i386
 
     - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        target: i686-unknown-linux-gnu
-        override: true
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup override set stable
+        rustup target add i686-unknown-linux-gnu
 
     - name: Generate the build system
       run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.configuration }}
@@ -35,71 +46,115 @@ jobs:
     - name: Build
       run: cmake --build build
 
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v3
       with:
         name: BunnymodXT-${{ runner.os }}-${{ matrix.configuration }}
         path: build/libBunnymodXT.so
+
+    - name: Prepare Release
+      if: startsWith(github.ref, 'refs/tags/') && matrix.configuration == 'Release'
+      run: |
+        cp build/libBunnymodXT.so .
+        7z a 2-BunnymodXT-${{ runner.os }}.7z libBunnymodXT.so LICENSE
+
+    - name: Release
+      if: startsWith(github.ref, 'refs/tags/') && matrix.configuration == 'Release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: 2-BunnymodXT-${{ runner.os }}.7z
+        draft: true
+        fail_on_unmatched_files: true
 
   build-flatpak:
     name: Build under Flatpak
     runs-on: ubuntu-latest
 
     container:
-      image: bilelmoussaoui/flatpak-github-actions:freedesktop-20.08
+      image: bilelmoussaoui/flatpak-github-actions:freedesktop-22.08
       options: --privileged
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         submodules: recursive
+        # We need the full history to find the tag
+        fetch-depth: 0
 
-    - uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v3
+    - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+    # We need the tags for the version string
+    - run: git fetch --force --tags
+
+    - uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v5
       with:
         manifest-path: build-aux/flatpak/rs.bxt.BunnymodXT.json
-        cache-key: flatpak-builder-${{ github.sha }}
+        cache: false
 
   build-windows:
-    name: Build on Windows (${{ matrix.configuration }})
+    name: Build on Windows (${{ matrix.configuration }}, COF=${{ matrix.cof }})
     runs-on: windows-2019
 
     strategy:
       fail-fast: false
       matrix:
         configuration: [Release, Debug]
+        cof: ['OFF', 'ON']
 
-    env:
-      BOOST_ROOT: ${{ github.workspace }}/3rdparty/boost
+        include:
+          - cof: 'OFF'
+            archive-filename: '1-BunnymodXT-Windows.7z'
+
+          - cof: 'ON'
+            artifact-label: '-CoFSteam'
+            archive-filename: '3-BunnymodXT-CoFSteam-Windows.7z'
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         submodules: recursive
+        # We need the full history to find the tag
+        fetch-depth: 0
+
+    # We need the tags for the version string
+    - run: git fetch --force --tags
 
     - name: Install Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: minimal
-        toolchain: stable
-        target: i686-pc-windows-msvc
-        override: true
+      run: |
+        rustup toolchain install stable --profile minimal
+        rustup override set stable
+        rustup target add i686-pc-windows-msvc
 
     - name: Install Boost
-      run: |
-        # https://github.com/actions/virtual-environments/issues/2667#issuecomment-800317643
-        mkdir -p ${env:BOOST_ROOT}
-        (New-Object System.Net.WebClient).DownloadFile("https://sourceforge.net/projects/boost/files/boost/1.72.0/boost_1_72_0.zip/download", "${env:BOOST_ROOT}\download.zip")
-        Add-Type -Assembly "System.IO.Compression.Filesystem"
-        [System.IO.Compression.ZipFile]::ExtractToDirectory("${env:BOOST_ROOT}\download.zip", "${env:BOOST_ROOT}")
-        cd ${env:BOOST_ROOT} 
-        cp -r boost_*/* .
+      id: install-boost
+      uses: MarkusJx/install-boost@v2.4.3
+      with:
+        boost_version: 1.78.0
+        platform_version: 2019
+        toolset: msvc
 
     - name: Generate the build system
-      run: cmake -B build -A Win32
+      run: cmake -B build -A Win32 -DCOF=${{ matrix.cof }}
+      env:
+        BOOST_ROOT: ${{ steps.install-boost.outputs.BOOST_ROOT }}
 
     - name: Build
       run: cmake --build build --config ${{ matrix.configuration }} -j $env:NUMBER_OF_PROCESSORS
 
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v3
       with:
-        name: BunnymodXT-${{ runner.os }}-${{ matrix.configuration }}
+        name: BunnymodXT${{ matrix.artifact-label }}-${{ runner.os }}-${{ matrix.configuration }}
         path: build\${{ matrix.configuration }}\BunnymodXT.dll
+
+    - name: Prepare Release
+      if: startsWith(github.ref, 'refs/tags/') && matrix.configuration == 'Release'
+      run: |
+        cp build/${{ matrix.configuration }}/BunnymodXT.dll .
+        7z a ${{ matrix.archive-filename }} BunnymodXT.dll LICENSE
+
+    - name: Release
+      if: startsWith(github.ref, 'refs/tags/') && matrix.configuration == 'Release'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ matrix.archive-filename }}
+        draft: true
+        fail_on_unmatched_files: true
